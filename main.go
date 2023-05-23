@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"sync"
 
@@ -150,7 +151,22 @@ func (i *Instance) Listen(ctx context.Context, addr string) error {
 	}
 }
 
+const html = `<!doctype html>
+<html>
+<head>
+  <title>Example</title>
+</head>
+<body>
+  256kb
+  <script src="http://localhost:35729/livereload.js"></script>
+</body>
+</html>`
+
 func main() {
+	fmt.Println("Listening on port 3000")
+	_ = http.ListenAndServe(":3000", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, html)
+	}))
 	i, err := NewInstance(context.Background(), helloWasm)
 	if err != nil {
 		log.Panicln(err)

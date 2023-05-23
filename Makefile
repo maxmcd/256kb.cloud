@@ -9,3 +9,7 @@ tidy: *.go
 run: ./examples/tinygo/hello/hello.wasm tidy
 	go run .
 
+run_dev: ./examples/tinygo/hello/hello.wasm tidy
+	cd ./cmd/dev && go run .
+
+

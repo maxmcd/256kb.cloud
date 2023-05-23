@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"strconv"
 	"unsafe"
 )
@@ -24,8 +23,8 @@ func network_buffer() (ptrSize uint64) {
 	// // 	runtime.GC()
 	// // 	c *= 2
 	// // }
-	foo := make([]byte, (32768*2*2)+24000, 32768*2*2+24000)
-	fmt.Println(len(foo), cap(foo))
+	// foo := make([]byte, (32768*2*2)+24000, 32768*2*2+24000)
+	// fmt.Println(len(foo), cap(foo))
 	return (uint64(ptr) << uint64(32)) | uint64(size)
 }
 
