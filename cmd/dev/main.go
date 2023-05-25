@@ -22,13 +22,13 @@ const html = `<!doctype html>
 <head>
   <title>Example</title>
   <style>
-  body { color: white; font-family: monospace; background: #333; }
-  .error { color: red; }
+  body { color: white; font-family: monospace; background: #333; font-size: 17px; }
+  pre { color: red;  }
   </style>
 </head>
 <body>
   Livereload...
-  <p class=error>%s</p>
+  <pre>%s</pre>
   <script src="http://localhost:35729/livereload.js"></script>
 </body>
 </html>`
@@ -45,12 +45,16 @@ func main() {
 	// Add dir to watcher
 	for _, dir := range []string{
 		"../../",
+		"../../templates",
 		".",
-		"../examples/*/*",
+		"../../examples/*/*/*",
 	} {
 		matches, err := filepath.Glob(dir)
 		if err != nil {
 			log.Panicln(err)
+		}
+		if len(matches) == 0 {
+			log.Panicln(fmt.Errorf("No matching paths found for path %q", dir))
 		}
 		for _, match := range matches {
 			err = watcher.Add(match)
@@ -131,12 +135,14 @@ func (br *BuilderRunner) _buildAndStart() error {
 
 	binaryLocation, err := br.build()
 	if err != nil {
+		br.lock.Unlock()
 		return err
 	}
 	if br.cmd != nil {
 		_ = br.cmd.Process.Kill()
 	}
 	if err := br.start(binaryLocation); err != nil {
+		br.lock.Unlock()
 		return err
 	}
 	br.lock.Unlock()

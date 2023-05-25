@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+
+<body>
+    hello
+    <script>
+        ws = new WebSocket("ws://" + window.location.host + window.location.pathname + "ws");
+        ws.onmessage = (e) => {
+            e.data.text().then((e) => document.getElementById("counter").innerText = e)
+        }
+    </script>
+    counter: <span id="counter">0</span>
+    <button onclick="ws.send('+')">Increment</button>
+</body>
+
+</html>

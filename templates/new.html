@@ -1,0 +1,40 @@
+{{ template "header" . }}
+
+<div class="container">
+    <h3>New App</h3>
+    <form method=post>
+        <div class="row">
+            <br>
+            <div class="filename">main.go</div>
+        </div>
+        <div class="row">
+            <textarea name="main.go">{{ .server_source }}</textarea>
+        </div>
+        <div class="row">
+            <br>
+            <div class="filename">index.html</div>
+        </div>
+        <div class="row">
+            <textarea name="index.html">{{ .html_source }}</textarea>
+        </div>
+        <div class="row">
+            <br>
+            <button type="submit">Submit</button>
+        </div>
+    </form>
+    <br>
+    <br>
+    <br>
+
+</div>
+
+<script>
+    const resize = (e) => { e.rows = (e.textContent.match(/\n/g) || []).length + 1 };
+    $(() => {
+        $(" textarea").each((_, e) => { resize(e); })
+        $("textarea").on("input", (e) => { resize(e.target); })
+    })
+</script>
+
+
+{{ template "footer" . }}

@@ -5,9 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
-	"log"
 	"net"
-	"net/http"
 	"os"
 	"sync"
 
@@ -19,12 +17,13 @@ import (
 
 var (
 	memoryLimitPages = 4
+	//go:embed examples/tinygo/counter/counter.wasm
+	counterWasm []byte
+	//go:embed examples/tinygo/counter/index.html
+	counterHTML []byte
+	//go:embed examples/tinygo/counter/main.go
+	counterSrc []byte
 )
-
-//go:embed examples/tinygo/hello/hello.wasm
-var helloWasm []byte
-
-type Runtime struct{}
 
 type Instance struct {
 	runtime wazero.Runtime
@@ -41,7 +40,8 @@ func NewInstance(ctx context.Context, src []byte) (*Instance, error) {
 	i.runtime = wazero.NewRuntimeWithConfig(
 		ctx,
 		wazero.NewRuntimeConfig().
-			WithMemoryLimitPages(uint32(memoryLimitPages)),
+			WithMemoryLimitPages(uint32(memoryLimitPages)). // limit to 256kb
+			WithCloseOnContextDone(true),                   // ensure we can cancel function calls
 	)
 
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, i.runtime); err != nil {
@@ -55,7 +55,7 @@ func NewInstance(ctx context.Context, src []byte) (*Instance, error) {
 		return nil, err
 	}
 
-	mod, err := i.runtime.InstantiateWithConfig(ctx, helloWasm,
+	mod, err := i.runtime.InstantiateWithConfig(ctx, counterWasm,
 		wazero.NewModuleConfig().WithStdout(os.Stdout).WithStderr(os.Stderr))
 	if err != nil {
 		return nil, err
@@ -148,30 +148,5 @@ func (i *Instance) Listen(ctx context.Context, addr string) error {
 				i.lock.Unlock()
 			}
 		}()
-	}
-}
-
-const html = `<!doctype html>
-<html>
-<head>
-  <title>Example</title>
-</head>
-<body>
-  256kb
-  <script src="http://localhost:35729/livereload.js"></script>
-</body>
-</html>`
-
-func main() {
-	fmt.Println("Listening on port 3000")
-	_ = http.ListenAndServe(":3000", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, html)
-	}))
-	i, err := NewInstance(context.Background(), helloWasm)
-	if err != nil {
-		log.Panicln(err)
-	}
-	if err := i.Listen(context.Background(), ":8080"); err != nil {
-		log.Panicln(err)
 	}
 }
