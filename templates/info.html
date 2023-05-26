@@ -1,14 +1,1 @@
-{{ template "header" . }}
-
-<body>
-    256kb / {{ .Name }}
-    <script>
-        ws = new WebSocket("ws://" + window.location.host + window.location.pathname);
-    </script>
-
-    <script src="http://localhost:35729/livereload.js"></script>
-</body>
-
-</html>
-
-{{ template "footer" . }}
+256kb / {{ .Name }}

@@ -1,7 +1,8 @@
-{{define "style"}}
 <style>
   html {
     font-family: Helvetica, Arial, sans-serif;
+    line-height: 1.15;
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
@@ -21,13 +22,25 @@
     border-top: 2px solid black;
   }
 
+  .file {
+    border: 1px solid #e0e0e0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 5px;
+  }
+
+  .file p {
+    margin: 3px 0 2px 3px;
+    font-weight: bold;
+  }
+
   textarea {
     width: 100%;
     resize: none;
-    background-color: #333;
-    color: #f0f1f2;
-    border: 3px solid #333;
+    background-color: #e0e0e0;
+    border: 1px solid #e0e0e0;
     outline: none;
+    padding: 0px;
   }
 </style>
-{{end}}

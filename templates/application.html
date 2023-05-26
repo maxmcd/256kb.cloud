@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Example</title>
+    {{ if .dev -}}
+      <script src="http://localhost:35729/livereload.js"></script>
+    {{- end }}
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script
+      src="https://unpkg.com/htmx.org@1.9.2"
+      integrity="sha384-L6OqL9pRWyyFU3+/bjdSri+iIphTN/bvYyM37tICVyOJkWZLpP2vGn6VUEXgzg6h"
+      crossorigin="anonymous"
+    ></script>
+    {{ partial "_style.html" . }}
+  </head>
+
+  <body>
+    {{ yield . }}
+  </body>
+</html>
