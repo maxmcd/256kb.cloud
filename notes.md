@@ -12,6 +12,8 @@ Networking
     - https://github.com/Allenxuxu/gev
     - https://github.com/panjf2000/gnet
     - https://github.com/lesismal/nbio (minimal deps)
+    - https://github.com/tidwall/evio (minimal deps)
+        - no backpressure mechanism
 
 ## 2023-05-23
 
