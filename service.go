@@ -3,15 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
 	_ "embed"
 	"encoding/base32"
 	"flag"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -30,12 +33,14 @@ type MP map[string]interface{}
 var upgrader = websocket.Upgrader{}
 
 func (s *Service) errorResp(w http.ResponseWriter, code int, err error) {
+	w.Header().Add("Content-Type", "text/html")
 	w.WriteHeader(code)
 	if err == nil {
 		err = fmt.Errorf(http.StatusText(code))
 	}
+	slog.Error("errorResp", "err", err)
 	if err := s.t.ExecuteTemplate(w, "error.html", MP{"error": err, "dev": s.cfg.dev}); err != nil {
-		slog.Error("Error rendering template", err, "name", "error.html")
+		slog.Error("Error rendering template", "err", err, "name", "error.html")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -44,6 +49,7 @@ type Service struct {
 	t       *template.Template
 	cfg     Config
 	builder *Builder
+	dataDir string
 }
 
 type Config struct {
@@ -51,7 +57,7 @@ type Config struct {
 	dev  bool
 }
 
-func NewService(cfg Config) (*Service, error) {
+func NewService(cfg Config, dataDir string) (*Service, error) {
 	var t *template.Template
 	t, err := template.New("").Funcs(template.FuncMap{
 		"partial": func(name string, data interface{}) (template.HTML, error) {
@@ -64,7 +70,12 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("error parsing templates: %w", err)
 	}
 
-	return &Service{t: t, cfg: cfg, builder: NewBuilder()}, nil
+	return &Service{
+		t:       t,
+		cfg:     cfg,
+		builder: NewBuilder(),
+		dataDir: dataDir,
+	}, nil
 }
 
 func (s *Service) executeTemplate(w http.ResponseWriter, name string, data MP) {
@@ -95,16 +106,60 @@ func (s *Service) newHandler(w http.ResponseWriter, r *http.Request, p httproute
 }
 
 func (s *Service) buildStatus(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	buildID, _ := strconv.Atoi(r.URL.Query().Get("id"))
-	build := s.builder.Get(buildID)
-	data := MP{"build": build}
-	if build == nil {
-		data = MP{"error": "Build not found"}
-	}
-	s.executePartial(w, "_build_status.html", data)
+	s.partialErrorHandler(w, "_build_status.html", func() (data MP, err error) {
+		buildID, _ := strconv.Atoi(r.URL.Query().Get("id"))
+		build := s.builder.Get(buildID)
+		if build == nil {
+			return nil, fmt.Errorf("Build not found")
+		}
+		data = MP{"build": build.templateData()}
+		if data["build"].(MP)["completed"].(bool) == false {
+			// Build is ongoing, send status
+			return data, nil
+		}
+		build.Lock()
+		defer build.Unlock()
+		slog.Info("Build complete, creating result", "id", build.ID)
+		if _, err := os.Stat(build.dir); os.IsNotExist(err) {
+			return nil, fmt.Errorf("build directory is missing")
+		}
+		s.builder.Delete(build.ID)
+		wasmFile, err := os.Open(filepath.Join(build.dir, "main.wasm"))
+		if err != nil {
+			return nil, fmt.Errorf("error opening build result: %w", err)
+		}
+		htmlFile, err := os.Open(filepath.Join(build.dir, "index.html"))
+		if err != nil {
+			return nil, fmt.Errorf("error opening build result: %w", err)
+		}
+		slog.Info("Computing hash", "id", build.ID)
+		hash, err := hashResult(wasmFile, htmlFile)
+		if err != nil {
+			return nil, fmt.Errorf("error hashing build result: %w", err)
+		}
+		slog.Info("Hash calculated", "id", build.ID, "hash", hash)
+		data["result_name"] = hash
+		_ = wasmFile.Close()
+		_ = htmlFile.Close()
+		appDir := filepath.Join(s.dataDir, hash)
+		if _, err := os.Stat(appDir); !os.IsNotExist(err) {
+			// Cleanup if this already exists.
+			_ = os.RemoveAll(build.dir)
+		}
+		if err := os.Rename(build.dir, appDir); err != nil {
+			return nil, fmt.Errorf("error creating app dir: %w", err)
+		}
+		return data, nil
+	})
 }
 
-func (s *Service) partialErrorHandler(w http.ResponseWriter, name string, cb func() (data MP, err error)) {
+type errorHandlerCB func() (data MP, err error)
+
+func (s *Service) _tErrorHandler(handler func(w http.ResponseWriter, name string, data MP),
+	w http.ResponseWriter,
+	name string,
+	cb errorHandlerCB,
+) {
 	data, err := cb()
 	if data == nil {
 		data = MP{}
@@ -112,7 +167,13 @@ func (s *Service) partialErrorHandler(w http.ResponseWriter, name string, cb fun
 	if err != nil {
 		data["error"] = err
 	}
-	s.executePartial(w, name, data)
+	handler(w, name, data)
+}
+func (s *Service) partialErrorHandler(w http.ResponseWriter, name string, cb errorHandlerCB) {
+	s._tErrorHandler(s.executePartial, w, name, cb)
+}
+func (s *Service) templateErrorHandler(w http.ResponseWriter, name string, cb errorHandlerCB) {
+	s._tErrorHandler(s.executeTemplate, w, name, cb)
 }
 
 func (s *Service) createHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
@@ -140,7 +201,7 @@ func (s *Service) createHandler(w http.ResponseWriter, r *http.Request, p httpro
 			return data, err
 		}
 		build := s.builder.SubmitBuild(buildDir, "tinygo build -x -o main.wasm -target wasi main.go")
-		data["build"] = build
+		data["build"] = build.templateData()
 		return data, nil
 	})
 }
@@ -150,7 +211,6 @@ func (s *Service) wsHandler(w http.ResponseWriter, r *http.Request, p httprouter
 		s.errorResp(w, http.StatusNotFound, fmt.Errorf("not found"))
 		return
 	}
-
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.errorResp(w, http.StatusBadRequest, err)
@@ -160,6 +220,7 @@ func (s *Service) wsHandler(w http.ResponseWriter, r *http.Request, p httprouter
 		_, msg, err := conn.ReadMessage()
 		fmt.Println(msg, err)
 		if err != nil {
+			s.errorResp(w, http.StatusBadRequest, err)
 			return
 		}
 		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("1"))
@@ -167,7 +228,28 @@ func (s *Service) wsHandler(w http.ResponseWriter, r *http.Request, p httprouter
 }
 
 func (s *Service) appInfoHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	s.executeTemplate(w, "info.html", MP{"name": p.ByName("name")})
+	s.templateErrorHandler(w, "info.html", func() (data MP, err error) {
+		name := p.ByName("name")
+		appDir := filepath.Join(s.dataDir, name)
+		if _, err := os.Stat(appDir); os.IsNotExist(err) {
+			w.WriteHeader(http.StatusNotFound)
+			return nil, fmt.Errorf("Application %q not found", name)
+		}
+
+		serverSrc, err := os.ReadFile(filepath.Join(appDir, "main.go"))
+		if err != nil {
+			return nil, fmt.Errorf("error reading main.go: %w", err)
+		}
+		htmlSrc, err := os.ReadFile(filepath.Join(appDir, "index.html"))
+		if err != nil {
+			return nil, fmt.Errorf("error reading index.html: %w", err)
+		}
+		return MP{
+			"name":          name,
+			"server_source": string(serverSrc),
+			"html_source":   string(htmlSrc),
+		}, nil
+	})
 }
 
 func (s *Service) appHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
@@ -184,23 +266,40 @@ func (s *Service) methodNotAllowedHandler() http.Handler {
 	})
 }
 
+func (s *Service) appSourceHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	name, _ := strings.CutSuffix(r.Host, "."+s.cfg.host)
+	appDir := filepath.Join(s.dataDir, name)
+	if _, err := os.Stat(appDir); os.IsNotExist(err) {
+		http.Error(w, fmt.Errorf("Application %q not found", name).Error(), http.StatusNotFound)
+		return
+	}
+
+	htmlSrc, err := os.ReadFile(filepath.Join(appDir, "index.html"))
+	if err != nil {
+		http.Error(w, fmt.Errorf("error reading index.html: %w", err).Error(), http.StatusInternalServerError)
+		return
+	}
+	_, _ = w.Write(htmlSrc)
+}
+
 func (s *Service) Handler() http.Handler {
+	// Main site router.
 	mainRouter := httprouter.New()
-	commonPagesRouter := httprouter.New()
-	mainRouter.MethodNotAllowed = commonPagesRouter
-	mainRouter.NotFound = commonPagesRouter
-	commonPagesRouter.MethodNotAllowed = s.methodNotAllowedHandler()
-	appRouter := httprouter.New()
-	appRouter.MethodNotAllowed = s.methodNotAllowedHandler()
+	// Separate router to get around overlapping wildcard rules.
+	namedPathRouter := httprouter.New()
+	mainRouter.MethodNotAllowed = namedPathRouter
+	mainRouter.NotFound = namedPathRouter
+	namedPathRouter.MethodNotAllowed = s.methodNotAllowedHandler()
+	// Router for apps serving on their own domains
+	appSubdomainRouter := httprouter.New()
+	appSubdomainRouter.MethodNotAllowed = s.methodNotAllowedHandler()
 
-	commonPagesRouter.GET("/new", s.newHandler)
-	commonPagesRouter.GET("/new/build-status", s.buildStatus)
-	commonPagesRouter.POST("/new", s.createHandler)
+	namedPathRouter.GET("/new", s.newHandler)
+	namedPathRouter.GET("/new/build-status", s.buildStatus)
+	namedPathRouter.POST("/new", s.createHandler)
 
-	appRouter.GET("/", func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-		_, _ = w.Write(counterHTML)
-	})
-	appRouter.GET("/ws", s.wsHandler)
+	appSubdomainRouter.GET("/", s.appSourceHandler)
+	appSubdomainRouter.GET("/ws", s.wsHandler)
 
 	mainRouter.GET("/", func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		s.executeTemplate(w, "index.html", nil)
@@ -208,7 +307,7 @@ func (s *Service) Handler() http.Handler {
 	mainRouter.GET("/:name", func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		// httprouter doesn't support overlapping parameter names and named
 		// routes so first check if this is a route name we have reserved.
-		handle, params, _ := commonPagesRouter.Lookup(http.MethodGet, r.URL.Path)
+		handle, params, _ := namedPathRouter.Lookup(http.MethodGet, r.URL.Path)
 		if handle != nil {
 			handle(w, r, params)
 			return
@@ -228,10 +327,26 @@ func (s *Service) Handler() http.Handler {
 		if subdomain == "www" || subdomain == "" {
 			mainRouter.ServeHTTP(w, r)
 		} else {
-			appRouter.ServeHTTP(w, r)
+			appSubdomainRouter.ServeHTTP(w, r)
 		}
 	})
 
+}
+
+func makeAppDir() (dir string, err error) {
+	user, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("error getting current user: %w", err)
+	}
+	appDir := filepath.Join(user.HomeDir, ".256kb")
+	if fi, err := os.Stat(appDir); os.IsNotExist(err) {
+		if err := os.Mkdir(appDir, 0777); err != nil {
+			return "", fmt.Errorf("error making directory %q: %w", appDir, err)
+		}
+	} else if !fi.IsDir() {
+		return "", fmt.Errorf("data directory location %q already exists but it is not a directory", err)
+	}
+	return appDir, nil
 }
 
 func main() {
@@ -242,13 +357,18 @@ func main() {
 	flag.BoolVar(&cfg.dev, "dev", false, "Run the server in development mode")
 	flag.Parse()
 
-	service, err := NewService(cfg)
+	appDir, err := makeAppDir()
+	if err != nil {
+		log.Panicln(err)
+	}
+
+	service, err := NewService(cfg, appDir)
 	if err != nil {
 		log.Panicln(err)
 	}
 
 	slog.Info("Listening", "port", 3000)
-	_ = http.ListenAndServe(":3000", logMiddleware(service.Handler()))
+	panic(http.ListenAndServe(":3000", logMiddleware(service.Handler())))
 
 	i, err := NewInstance(context.Background(), counterWasm)
 	if err != nil {
@@ -257,6 +377,17 @@ func main() {
 	if err := i.Listen(context.Background(), ":8080"); err != nil {
 		log.Panicln(err)
 	}
+}
+
+func hashResult(wasm, html io.Reader) (string, error) {
+	h := sha256.New()
+	if _, err := io.Copy(h, wasm); err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(h, html); err != nil {
+		return "", err
+	}
+	return bytesToBase32Hash(h.Sum(nil)), nil
 }
 
 // BytesToBase32Hash copies nix here

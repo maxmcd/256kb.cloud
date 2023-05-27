@@ -1,4 +1,4 @@
-module github.com/maxmcd/128kb
+module github.com/maxmcd/256kb
 
 go 1.20
 

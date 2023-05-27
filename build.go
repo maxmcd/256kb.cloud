@@ -12,7 +12,7 @@ import (
 )
 
 type Build struct {
-	lock sync.Mutex
+	sync.Mutex
 
 	ID          int
 	CreatedAt   time.Time
@@ -24,11 +24,22 @@ type Build struct {
 	Logs        *bytes.Buffer
 }
 
-func (b *Build) TimeSince() string {
-	return fmt.Sprint(int(time.Since(b.CreatedAt).Seconds())) + " seconds ago"
+func (b *Build) templateData() MP {
+	b.Lock()
+	defer b.Unlock()
+	return MP{
+		"id":         b.ID,
+		"completed":  !b.CompletedAt.IsZero(),
+		"time_since": b.timeSince(),
+		"error":      b.Error,
+		"logs":       b.Logs,
+		"exit_code":  b.ExitCode,
+		"command":    b.Command,
+	}
 }
-func (b *Build) Completed() bool {
-	return !b.CompletedAt.IsZero()
+
+func (b *Build) timeSince() string {
+	return fmt.Sprint(int(time.Since(b.CreatedAt).Seconds())) + " seconds ago"
 }
 
 type Builder struct {
@@ -68,9 +79,9 @@ func (b *Builder) SubmitBuild(dir, command string) *Build {
 
 	go func() {
 		if err := b.build(build); err != nil {
-			build.lock.Lock()
+			build.Lock()
 			build.Error = err
-			build.lock.Unlock()
+			build.Unlock()
 		}
 	}()
 	return build
@@ -83,13 +94,13 @@ func (b *Builder) build(build *Build) error {
 	cmd.Dir = build.dir
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
 
-	build.lock.Lock()
 	err := cmd.Run()
+	build.Lock()
 	slog.Info("Build complete")
 	build.Error = err
 	c := cmd.ProcessState.ExitCode()
 	build.ExitCode = &c
 	build.CompletedAt = time.Now()
-	build.lock.Unlock()
+	build.Unlock()
 	return nil
 }

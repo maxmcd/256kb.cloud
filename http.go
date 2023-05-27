@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -36,6 +38,7 @@ func logMiddleware(h http.Handler) http.Handler {
 
 type responseObserver struct {
 	http.ResponseWriter
+	http.Hijacker
 	status      int
 	written     int
 	wroteHeader bool
@@ -57,6 +60,10 @@ func (o *responseObserver) WriteHeader(code int) {
 	}
 	o.wroteHeader = true
 	o.status = code
+}
+
+func (w *responseObserver) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.ResponseWriter.(http.Hijacker).Hijack()
 }
 
 func prettyByteSize(b int) string {

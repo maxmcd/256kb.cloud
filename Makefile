@@ -8,15 +8,14 @@ MAKEFLAGS += --jobs=8
 	tinygo build -o $@ -target wasi $<
 
 
-./sql/models.go: ./sql/*.sql
-	cd sql && go run github.com/kyleconroy/sqlc/cmd/sqlc@v1.18.0 generate
+# ./sql/models.go: ./sql/*.sql
+# 	cd sql && go run github.com/kyleconroy/sqlc/cmd/sqlc@v1.18.0 generate
 
 .PHONY: tidy
 tidy: *.go
 	go mod tidy
 
 build: tidy \
-	./sql/models.go \
 	./examples/tinygo/counter/counter.wasm \
 	./examples/tinygo/hello/hello.wasm
 

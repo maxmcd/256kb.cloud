@@ -1,1 +1,31 @@
-256kb / {{ .Name }}
+{{ if .error }}
+  <div class="container">
+    <div class="row">
+      <div class="box text-box">
+        <p class="error">{{ .error }}</p>
+      </div>
+    </div>
+  </div>
+{{ else }}
+  <div class="container">
+    <div class="row">
+      256kb /
+      {{ .name }}
+      <br /><br />
+    </div>
+    <div class="row">
+      <div class="col-sm-6">
+        <div class="box file">
+          <p>main.go</p>
+          <pre><code class="language-go">{{ .server_source }}</code></pre>
+        </div>
+      </div>
+      <div class="col-sm-6">
+        <div class="box file">
+          <p>index.html</p>
+          <pre><code class="language-html">{{ .html_source }}</code></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+{{ end }}

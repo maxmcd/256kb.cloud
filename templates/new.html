@@ -1,7 +1,38 @@
 <div class="container">
   <div class="row">
+    .
     <h3>New App</h3>
-    {{ partial "_new_form.html" . }}
+    <form hx-post="" hx-target="#build-status">
+      <div class="row">
+        <div class="col-sm-10">foo</div>
+        <div class="col-sm-2 align-items-right">
+          <button type="submit">Submit</button>
+        </div>
+      </div>
+
+      <br />
+      <br />
+      <div id="build-status">
+        {{ if .build }}{{ partial "_build_status.html" . }}{{ end }}
+      </div>
+
+      <input
+        type="hidden"
+        name="source_filename"
+        value="{{ .source_filename }}"
+      />
+      <div class="box file">
+        <p>main.go</p>
+        <textarea name="server_source">{{ .server_source }}</textarea>
+      </div>
+
+      <div class="box file">
+        <p>index.html</p>
+        <textarea name="html_source">{{ .html_source }}</textarea>
+      </div>
+      <br />
+      <br />
+    </form>
   </div>
   <br />
   <br />
@@ -10,7 +41,10 @@
 
 <script>
   const resize = (e) => {
-    e.rows = Math.max((e.value.match(/\n/g) || []).length + 2, 10);
+    e.rows = Math.min(
+      Math.max((e.value.match(/\n/g) || []).length + 2, 10),
+      40
+    );
   };
   htmx.onLoad(function (content) {
     $(content)
