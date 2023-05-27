@@ -28,23 +28,6 @@ import (
 //go:embed templates/*.html
 var templatesFS embed.FS
 
-type MP map[string]interface{}
-
-var upgrader = websocket.Upgrader{}
-
-func (s *Service) errorResp(w http.ResponseWriter, code int, err error) {
-	w.Header().Add("Content-Type", "text/html")
-	w.WriteHeader(code)
-	if err == nil {
-		err = fmt.Errorf(http.StatusText(code))
-	}
-	slog.Error("errorResp", "err", err)
-	if err := s.t.ExecuteTemplate(w, "error.html", MP{"error": err, "dev": s.cfg.dev}); err != nil {
-		slog.Error("Error rendering template", "err", err, "name", "error.html")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
 type Service struct {
 	t       *template.Template
 	cfg     Config
@@ -55,7 +38,10 @@ type Service struct {
 type Config struct {
 	host string
 	dev  bool
+	port int
 }
+
+type MP map[string]interface{}
 
 func NewService(cfg Config, dataDir string) (*Service, error) {
 	var t *template.Template
@@ -78,6 +64,20 @@ func NewService(cfg Config, dataDir string) (*Service, error) {
 	}, nil
 }
 
+var upgrader = websocket.Upgrader{}
+
+func (s *Service) errorResp(w http.ResponseWriter, code int, err error) {
+	w.Header().Add("Content-Type", "text/html")
+	w.WriteHeader(code)
+	if err == nil {
+		err = fmt.Errorf(http.StatusText(code))
+	}
+	slog.Error("errorResp", "err", err)
+	if err := s.t.ExecuteTemplate(w, "error.html", MP{"error": err, "dev": s.cfg.dev}); err != nil {
+		slog.Error("Error rendering template", "err", err, "name", "error.html")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
 func (s *Service) executeTemplate(w http.ResponseWriter, name string, data MP) {
 	if data == nil {
 		data = MP{}
@@ -117,6 +117,12 @@ func (s *Service) buildStatus(w http.ResponseWriter, r *http.Request, p httprout
 			// Build is ongoing, send status
 			return data, nil
 		}
+		if *data["build"].(MP)["exit_code"].(*int) != 0 {
+			// Build failed
+			_ = os.RemoveAll(build.dir)
+			return data, nil
+		}
+
 		build.Lock()
 		defer build.Unlock()
 		slog.Info("Build complete, creating result", "id", build.ID)
@@ -355,6 +361,7 @@ func main() {
 	}
 	flag.StringVar(&cfg.host, "host", "localhost:3001", "The HTTP Host the application will accept requests from.")
 	flag.BoolVar(&cfg.dev, "dev", false, "Run the server in development mode")
+	flag.IntVar(&cfg.port, "port", 3000, "Listen to me...")
 	flag.Parse()
 
 	appDir, err := makeAppDir()
@@ -368,7 +375,7 @@ func main() {
 	}
 
 	slog.Info("Listening", "port", 3000)
-	panic(http.ListenAndServe(":3000", logMiddleware(service.Handler())))
+	panic(http.ListenAndServe(":"+fmt.Sprint(cfg.port), logMiddleware(service.Handler())))
 
 	i, err := NewInstance(context.Background(), counterWasm)
 	if err != nil {

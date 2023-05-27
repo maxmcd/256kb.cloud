@@ -1,4 +1,4 @@
-module github.com/maxmcd/256kb
+module github.com/maxmcd/256kb.cloud
 
 go 1.20
 
