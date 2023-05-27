@@ -1,25 +1,7 @@
 <div class="container">
   <div class="row">
     <h3>New App</h3>
-    <form method="post">
-      <input
-        type="hidden"
-        name="source_filename"
-        value="{{ .source_filename }}"
-      />
-      <div class="file">
-        <p>main.go</p>
-        <textarea name="server_source">{{ .server_source }}</textarea>
-      </div>
-
-      <div class="file">
-        <p>index.html</p>
-        <textarea name="html_source">{{ .html_source }}</textarea>
-      </div>
-      <br />
-      <br />
-      <button type="submit">Submit</button>
-    </form>
+    {{ partial "_new_form.html" . }}
   </div>
   <br />
   <br />
@@ -28,10 +10,16 @@
 
 <script>
   const resize = (e) => {
-    e.rows = Math.max((e.textContent.match(/\n/g) || []).length + 2, 10);
+    e.rows = Math.max((e.value.match(/\n/g) || []).length + 2, 10);
   };
-  $(() => {
-    $("textarea").each((_, e) => resize(e));
-    $("textarea").on("input", (e) => resize(e.target));
+  htmx.onLoad(function (content) {
+    $(content)
+      .find("textarea")
+      .each((_, e) => resize(e));
+    $(content)
+      .find("textarea")
+      .on("input", (e) => resize(e.target));
   });
 </script>
+
+<!--  -->

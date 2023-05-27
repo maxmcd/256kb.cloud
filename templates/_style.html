@@ -1,16 +1,6 @@
 <style>
   html {
     font-family: Helvetica, Arial, sans-serif;
-    line-height: 1.15;
-    -webkit-text-size-adjust: 100%;
-  }
-
-  body {
-    margin: 0px;
-  }
-
-  .container {
-    padding: 0px 10%;
   }
 
   iframe.app {
@@ -22,7 +12,23 @@
     border-top: 2px solid black;
   }
 
-  .file {
+  .text-box {
+    padding: 10px;
+  }
+
+  code {
+    background-color: #e0e0e0;
+  }
+  .align-items-right {
+    text-align: right;
+  }
+  pre.wrap {
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    padding: 5px;
+  }
+  .box {
     border: 1px solid #e0e0e0;
     width: 100%;
     display: flex;
@@ -34,13 +40,22 @@
     margin: 3px 0 2px 3px;
     font-weight: bold;
   }
+  pre {
+    margin: 0px;
+  }
+
+  .error {
+    color: red;
+  }
 
   textarea {
+    padding: 5px;
+    font-family: monospace;
+    color: #333333;
     width: 100%;
     resize: none;
     background-color: #e0e0e0;
-    border: 1px solid #e0e0e0;
+    border: 0px;
     outline: none;
-    padding: 0px;
   }
 </style>

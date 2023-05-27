@@ -1,0 +1,33 @@
+{{ if .error }}
+  <div class="box text-box">
+    <p class="error">{{ .error }}</p>
+  </div>
+{{ else }}
+  <div
+    {{ if ne .build.Completed true }}
+      hx-get="/new/build-status?id={{ .build.ID }}" hx-trigger="every 1s"
+    {{ end }}
+    class="build-status"
+  >
+    <div class="box text-box">
+      {{ if .build.Completed }}
+        <b>Build complete</b>
+        Build completed with exit code:
+        {{ .build.ExitCode }}
+        {{ if .build.Error }}
+          <br />
+          Exited with error:
+          {{ .build.Error }}
+        {{ end }}
+      {{ else }}
+        <b>Building...</b>
+        Build started:
+        {{ .build.TimeSince }}
+      {{ end }}
+      <br />
+      Command: "{{ .build.Command }}"
+      <br />
+      Logs: <code><pre class="wrap">{{ .build.Logs.String }}</pre></code>
+    </div>
+  </div>
+{{ end }}

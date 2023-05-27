@@ -150,7 +150,7 @@ func (br *BuilderRunner) _buildAndStart() error {
 }
 
 func healthCheck() error {
-	count := 20
+	count := 30
 	for i := 0; i < count; i++ {
 		// TODO: replace this all with a custom version of Bun so that we don't
 		// impact user applications, or a wrapper script
@@ -215,7 +215,7 @@ func (br *BuilderRunner) build() (binaryLocation string, err error) {
 }
 
 func (br *BuilderRunner) start(binaryLocation string) (err error) {
-	br.cmd = exec.Command(binaryLocation)
+	br.cmd = exec.Command(binaryLocation, "-dev")
 	br.cmd.Env = os.Environ()
 	br.cmd.Env = append(br.cmd.Env, "PORT=3000")
 	br.cmd.Stdout = os.Stdout
