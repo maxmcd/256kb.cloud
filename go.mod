@@ -7,4 +7,5 @@ require (
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/tetratelabs/wazero v1.1.0
 	golang.org/x/exp v0.0.0-20230519143937-03e91628a987
+	golang.org/x/sync v0.2.0
 )

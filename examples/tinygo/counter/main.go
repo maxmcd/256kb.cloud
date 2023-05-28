@@ -22,11 +22,11 @@ func network_buffer() (ptrSize uint64) {
 	return (uint64(ptr) << uint64(32)) | uint64(size)
 }
 
-//export conn_closed
-func conn_closed(connid uint32) { delete(members, connid) }
+//export on_conn_close
+func on_conn_close(connid uint32) { delete(members, connid) }
 
-//export conn_accept
-func conn_accept(connid uint32) uint32 {
+//export on_new_conn
+func on_new_conn(connid uint32) uint32 {
 	members[connid] = struct{}{}
 	sendCounter(connid)
 	return 0
@@ -37,12 +37,14 @@ func sendCounter(connid uint32) {
 	conn_send(connid, uint32(ln))
 }
 
-//export conn_recv
-func conn_recv(connid, offset uint32) {
+//export on_conn_read
+func on_conn_read(connid, offset uint32) uint32 {
+	counter++
 	// If we get any bytes, increment the counter and send it out
 	for member := range members {
 		sendCounter(member)
 	}
+	return 0
 }
 
 //export conn_close

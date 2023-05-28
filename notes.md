@@ -27,3 +27,13 @@ Initial design
 - Proxy requests to each application, keep track of connection ids, send bytes back to a connection. Connection use is owned by either the http handler goroutine or the goroutine of the running application.
 - Sleeping and resuming memory from disk (skip for now!)
 - Hosting static web page and and info page
+
+## 2023-05-28
+
+Instantiate is much faster with a module filecache. 0.6ms vs 3ms.
+```
+BenchmarkInstance/filecache
+BenchmarkInstance/filecache-8         	    1683	    661342 ns/op	  623543 B/op	    1574 allocs/op
+BenchmarkInstance/no_cache
+BenchmarkInstance/no_cache-8          	     403	   3026209 ns/op	 3222913 B/op	    2580 allocs/op
+```

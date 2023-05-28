@@ -324,6 +324,10 @@ func (s *Service) Handler() http.Handler {
 	appSubdomainRouter.MethodNotAllowed = s.methodNotAllowedHandler()
 
 	namedPathRouter.GET("/new", s.newHandler)
+	namedPathRouter.GET("/health", func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+		fmt.Fprint(w, "I love you. I'm glad I exist.")
+	})
+
 	namedPathRouter.GET("/new/build-status", s.buildStatus)
 	namedPathRouter.POST("/new", s.createHandler)
 
@@ -394,11 +398,12 @@ func main() {
 	if err != nil {
 		log.Panicln(err)
 	}
+	_ = service
 
 	slog.Info("Listening", "port", cfg.port)
 	panic(http.ListenAndServe(":"+fmt.Sprint(cfg.port), logMiddleware(service.Handler())))
 
-	i, err := NewInstance(context.Background(), counterWasm)
+	i, err := NewInstance(context.Background(), counterWasm, "")
 	if err != nil {
 		log.Panicln(err)
 	}
