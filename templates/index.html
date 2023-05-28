@@ -1,1 +1,50 @@
-256kb
+<div class="container">
+  <div class="row">
+    <div class="col-sm-12">
+      <h1>256kb.cloud</h1>
+      <p>Tiny baby cloud provider. All you get is:</p>
+      <ul>
+        <li>
+          One index.html page
+          <s>up to 256kb in size. No external links allowed.</s>
+        </li>
+        <li>One server-side WebAssembly binary with only 256kb of memory.</li>
+        <li>
+          Server code is submitted and compiled to WebAssembly. Compilers for
+          Go, <s>Zig, and Rust</s> are available.
+        </li>
+        <li>
+          Everything is immutable. Edits to existing applications will create a
+          new application.
+        </li>
+        <li>
+          Everything is open, all code, <s>logs, and runtime information</s> are
+          available.
+        </li>
+      </ul>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-8">
+      <h4>Recent Apps:</h4>
+      <table class="table table-bordered">
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{ range .apps }}
+            <tr>
+              <td>
+                <a href="/{{ .name }}/info">{{ .name }}</a>
+              </td>
+              <td>{{ .date }}</td>
+            </tr>
+          {{ end }}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

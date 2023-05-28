@@ -11,13 +11,16 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"golang.org/x/exp/slog"
@@ -258,6 +261,26 @@ func (s *Service) appInfoHandler(w http.ResponseWriter, r *http.Request, p httpr
 	})
 }
 
+func (s *Service) indexHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	entries, err := ioutil.ReadDir(s.dataDir)
+	if err != nil {
+		s.errorResp(w, http.StatusInternalServerError, err)
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ModTime().After(entries[j].ModTime()) })
+	apps := []MP{}
+	for _, e := range entries {
+		apps = append(apps, MP{
+			"name": e.Name(),
+			"date": e.ModTime().Format(time.RFC3339),
+		})
+	}
+	if len(apps) > 50 {
+		apps = apps[:50]
+	}
+	s.executeTemplate(w, "index.html", MP{"apps": apps})
+}
+
 func (s *Service) appHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	name := p.ByName("name")
 	s.executeTemplate(w, "app.html", MP{
@@ -307,9 +330,7 @@ func (s *Service) Handler() http.Handler {
 	appSubdomainRouter.GET("/", s.appSourceHandler)
 	appSubdomainRouter.GET("/ws", s.wsHandler)
 
-	mainRouter.GET("/", func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-		s.executeTemplate(w, "index.html", nil)
-	})
+	mainRouter.GET("/", s.indexHandler)
 	mainRouter.GET("/:name", func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 		// httprouter doesn't support overlapping parameter names and named
 		// routes so first check if this is a route name we have reserved.
@@ -374,7 +395,7 @@ func main() {
 		log.Panicln(err)
 	}
 
-	slog.Info("Listening", "port", 3000)
+	slog.Info("Listening", "port", cfg.port)
 	panic(http.ListenAndServe(":"+fmt.Sprint(cfg.port), logMiddleware(service.Handler())))
 
 	i, err := NewInstance(context.Background(), counterWasm)

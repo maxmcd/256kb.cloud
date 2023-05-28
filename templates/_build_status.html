@@ -10,25 +10,43 @@
     class="build-status"
   >
     <div class="box text-box">
-      {{ if .build.completed }}
+      {{ if .build.completed -}}
         <b>Build complete</b>
-        Build completed with exit code:
-        {{ .build.exit_code }}
-        {{ if .build.error }}
-          <br />
-          Exited with error:
-          {{ .build.error }}
-        {{ end }}
-        Continue to application:
-        <a href="/{{ .result_name }}/info">{{ .result_name }}/info</a>
-      {{ else }}
+      {{- else -}}
         <b>Building...</b>
-        Build started:
-        {{ .build.time_since }}
+      {{- end }}
+      <p>
+        {{ if .build.completed }}
+          Exit code:
+          {{ .build.exit_code }}
+          <br />
+          Build time:
+          {{ .build.time_seconds }}
+          {{ if .build.error }}
+            <br />
+            Exited with error:
+            {{ .build.error }}
+          {{ end }}
+        {{ else }}
+          Build started: {{ .build.time_seconds }} ago
+        {{ end }}
+        <br />
+        Command: "{{ .build.command }}"
+      </p>
+      {{ if .build.completed }}
+        <div class="box text-box">
+          <p>
+            {{ if .build.error }}
+              <b>Build failed with an error:</b><br />
+              Review the logs and try again.
+            {{ else }}
+              <b>Build completed successfully:</b><br />
+              Continue to the application page >
+              <a href="/{{ .result_name }}/info">{{ .result_name }}/info</a>
+            {{ end }}
+          </p>
+        </div>
       {{ end }}
-      <br />
-      Command: "{{ .build.command }}"
-      <br />
       Logs: <code><pre class="wrap">{{ .build.logs.String }}</pre></code>
     </div>
   </div>

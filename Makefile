@@ -19,6 +19,11 @@ build: tidy \
 	./examples/tinygo/counter/counter.wasm \
 	./examples/tinygo/hello/hello.wasm
 
+deploy_linux:
+	env GOOS=linux GOARCH=amd64 go build .
+	rsync -avz 256kb.cloud  root@5.161.53.66:~/app/256kb.cloud
+	ssh root@5.161.53.66 "service 256kb restart && service 256kb status"
+
 .PHONY: run
 run: build
 	go run .

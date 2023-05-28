@@ -28,18 +28,18 @@ func (b *Build) templateData() MP {
 	b.Lock()
 	defer b.Unlock()
 	return MP{
-		"id":         b.ID,
-		"completed":  !b.CompletedAt.IsZero(),
-		"time_since": b.timeSince(),
-		"error":      b.Error,
-		"logs":       b.Logs,
-		"exit_code":  b.ExitCode,
-		"command":    b.Command,
+		"id":           b.ID,
+		"completed":    !b.CompletedAt.IsZero(),
+		"time_seconds": b.timeSeconds(),
+		"error":        b.Error,
+		"logs":         b.Logs,
+		"exit_code":    b.ExitCode,
+		"command":      b.Command,
 	}
 }
 
-func (b *Build) timeSince() string {
-	return fmt.Sprint(int(time.Since(b.CreatedAt).Seconds())) + " seconds ago"
+func (b *Build) timeSeconds() string {
+	return fmt.Sprint(int(time.Since(b.CreatedAt).Seconds())) + " seconds"
 }
 
 type Builder struct {
@@ -96,7 +96,7 @@ func (b *Builder) build(build *Build) error {
 
 	err := cmd.Run()
 	build.Lock()
-	slog.Info("Build complete")
+	slog.Info("Build complete", "id", build.ID)
 	build.Error = err
 	c := cmd.ProcessState.ExitCode()
 	build.ExitCode = &c
