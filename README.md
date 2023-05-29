@@ -1,5 +1,5 @@
 <div style="width: 100%;">
-  <img src="templates/readme-img.svg" style="width: 100%;">
+  <img src="templates/readme.svg" style="width: 100%;">
 </div>
 
 [https://256kb.cloud](https://256kb.cloud)

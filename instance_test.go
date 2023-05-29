@@ -7,55 +7,56 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
-
-	"runtime/trace"
 )
 
-func simpleMemoryRestore(ctx context.Context, tmpDir string) error {
-	region := trace.StartRegion(ctx, "newInstance")
-	i, err := NewInstance(ctx, tmpDir, "", counterWasm)
+type T interface {
+	Fatal(args ...any)
+	Error(args ...any)
+	TempDir() string
+}
+
+var _ T = new(testing.T)
+var _ T = new(testing.B)
+
+func requireEqual[A comparable](t T, expected A, actual A) {
+	if expected != actual {
+		t.Fatal(fmt.Sprintf("Expected value '%v', but got '%v'", expected, actual))
+	}
+}
+
+func simpleMemoryRestore(t T, ctx context.Context, tmpDir string) error {
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.wasm"), counterWasm, 0666); err != nil {
+		return err
+	}
+	i, err := NewInstance(ctx, tmpDir, tmpDir)
 	if err != nil {
 		return err
 	}
-	region.End()
-	region = trace.StartRegion(ctx, "startInstance")
-	if err := i.Start(ctx); err != nil {
-		return err
-	}
-	region.End()
-	trace.WithRegion(ctx, "writeReadClose", func() {
-		conn := &readWriteCloser{Buffer: bytes.Buffer{}}
-		connID := i.NewConn(conn)
-		i.OnConnRead(connID, []byte("hi"))
-
-		if conn.Buffer.String() != "01" {
-			panic(fmt.Errorf("unexpected byte value, got %q, expecting %q", conn.Buffer.String(), "01"))
-		}
-		i.OnConnClose(connID)
-	})
-
-	if err := i.Stop(ctx); err != nil {
-		return err
-	}
-	region = trace.StartRegion(ctx, "startInstance2")
-	if err := i.Start(ctx); err != nil {
-		return err
-	}
-	region.End()
 	{
 		conn := &readWriteCloser{Buffer: bytes.Buffer{}}
-		connID := i.NewConn(conn)
+		connID, err := i.NewConn(ctx, conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireEqual(t, 1, i.connectionCount)
 		i.OnConnRead(connID, []byte("hi"))
 		fmt.Println(conn.Buffer.String())
-		if conn.Buffer.String() != "12" {
-			return fmt.Errorf("unexpected byte value, got %q, expecting %q", conn.Buffer.String(), "12")
-		}
-		i.OnConnClose(connID)
+		requireEqual(t, conn.Buffer.String(), "01")
+		i.OnConnClose(ctx, connID)
 	}
-	if err := i.Stop(ctx); err != nil {
-		return err
+	requireEqual(t, 0, i.connectionCount)
+	{
+		conn := &readWriteCloser{Buffer: bytes.Buffer{}}
+		connID, err := i.NewConn(ctx, conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireEqual(t, 1, i.connectionCount)
+		i.OnConnRead(connID, []byte("hi"))
+		fmt.Println(conn.Buffer.String())
+		requireEqual(t, conn.Buffer.String(), "12")
+		i.OnConnClose(ctx, connID)
 	}
 	os.Remove(filepath.Join(tmpDir, "mem"))
 	i.runtime.Close(ctx)
@@ -63,7 +64,10 @@ func simpleMemoryRestore(ctx context.Context, tmpDir string) error {
 }
 
 func TestMemoryRestore(t *testing.T) {
-	if err := simpleMemoryRestore(context.Background(), t.TempDir()); err != nil {
+	if err := simpleMemoryRestore(t, context.Background(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := simpleMemoryRestore(t, context.Background(), t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -80,10 +84,10 @@ func (r *readWriteCloser) Close() error {
 
 func BenchmarkRestore(b *testing.B) {
 	tmpDir := b.TempDir()
+
 	for i := 0; i < b.N; i++ {
-		if err := simpleMemoryRestore(context.Background(), tmpDir); err != nil {
+		if err := simpleMemoryRestore(b, context.Background(), tmpDir); err != nil {
 			b.Fatal(err)
 		}
-		runtime.GC()
 	}
 }

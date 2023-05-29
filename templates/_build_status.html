@@ -17,11 +17,13 @@
       {{- end }}
       <p>
         {{ if .build.completed }}
-          Exit code:
-          {{ .build.exit_code }}
-          <br />
           Build time:
           {{ .build.time_seconds }}
+          <br />
+          Compilation exit code:
+          {{ .build.exit_code }}
+          <br />
+          Compilation command: "{{ .build.command }}"
           {{ if .build.error }}
             <br />
             Exited with error:
@@ -29,9 +31,9 @@
           {{ end }}
         {{ else }}
           Build started: {{ .build.time_seconds }} ago
+          <br />
+          Compilation command: "{{ .build.command }}"
         {{ end }}
-        <br />
-        Command: "{{ .build.command }}"
       </p>
       {{ if .build.completed }}
         <div class="box text-box">

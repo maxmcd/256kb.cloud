@@ -31,24 +31,24 @@ type Instance struct {
 	connLock    sync.Mutex
 	connections []io.ReadWriteCloser
 
-	runtime       wazero.Runtime
-	mod           api.Module
-	instanceLock  sync.Mutex
-	onConnRead    api.Function
-	onNewConn     api.Function
-	onConnClose   api.Function
-	networkBuffer []byte
-	bufferPtr     uint32
-	bufferSize    uint32
+	runtime         wazero.Runtime
+	mod             api.Module
+	instanceLock    sync.Mutex
+	connectionCount int
+	onConnRead      api.Function
+	onNewConn       api.Function
+	onConnClose     api.Function
+	networkBuffer   []byte
+	bufferPtr       uint32
+	bufferSize      uint32
 
 	writeSemaphore *semaphore.Weighted
 
-	cacheDir  string
-	wasmPath  string
-	wasmBytes []byte
+	cacheDir string
+	dataDir  string
 }
 
-func NewInstance(ctx context.Context, cacheDir, wasmPath string, wasmBytes []byte) (*Instance, error) {
+func NewInstance(ctx context.Context, cacheDir, dataDir string) (*Instance, error) {
 	runtimeConfig := wazero.NewRuntimeConfig().
 		WithMemoryLimitPages(uint32(memoryLimitPages)). // limit to 256kb
 		WithCloseOnContextDone(true)                    // ensure we can cancel function calls
@@ -61,11 +61,15 @@ func NewInstance(ctx context.Context, cacheDir, wasmPath string, wasmBytes []byt
 		runtimeConfig = runtimeConfig.WithCompilationCache(cache)
 	}
 
+	wasmPath := filepath.Join(dataDir, "main.wasm")
+	if _, err := os.Stat(wasmPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("main.wasm not found in datadir path %q", wasmPath)
+	}
+
 	i := &Instance{
 		writeSemaphore: semaphore.NewWeighted(4086),
 		cacheDir:       cacheDir,
-		wasmPath:       wasmPath,
-		wasmBytes:      wasmBytes,
+		dataDir:        dataDir,
 		runtime:        wazero.NewRuntimeWithConfig(ctx, runtimeConfig),
 	}
 
@@ -84,10 +88,14 @@ func NewInstance(ctx context.Context, cacheDir, wasmPath string, wasmBytes []byt
 }
 
 func (i *Instance) Start(ctx context.Context) error {
-	i.instanceLock.Lock()
-	defer i.instanceLock.Unlock()
 	var err error
-	i.mod, err = i.runtime.InstantiateWithConfig(ctx, counterWasm,
+	wasmPath := filepath.Join(i.dataDir, "main.wasm")
+	wasmBytes, err := os.ReadFile(wasmPath)
+	if err != nil {
+		return fmt.Errorf("main.wasm not found in data dir %q", wasmPath)
+	}
+
+	i.mod, err = i.runtime.InstantiateWithConfig(ctx, wasmBytes,
 		wazero.NewModuleConfig().
 			WithStdout(os.Stdout).
 			WithStderr(os.Stderr),
@@ -101,8 +109,10 @@ func (i *Instance) Start(ctx context.Context) error {
 		b, _ := i.mod.Memory().Read(0, i.mod.Memory().Size())
 		idx := 0
 		for {
-			// TODO: Do we just read the whole thing the first time, do we need a loop?
-			// What if the memory size is 4 blocks and the default mod memory is 2?
+			// TODO: Do we just read the whole thing the first time, do we need
+			// a loop?
+			// TODO: What if the memory size is 4 blocks and the default mod
+			// memory is 2?
 			n, err := memFile.Read(b[idx:])
 			if err == io.EOF {
 				break
@@ -118,20 +128,20 @@ func (i *Instance) Start(ctx context.Context) error {
 
 	i.onConnRead = i.mod.ExportedFunction("on_conn_read")
 	if i.onConnRead == nil {
-		return fmt.Errorf("on_conn_read function now found")
+		return fmt.Errorf("on_conn_read function not found")
 	}
 	i.onNewConn = i.mod.ExportedFunction("on_new_conn")
 	if i.onNewConn == nil {
-		return fmt.Errorf("on_new_conn function now found")
+		return fmt.Errorf("on_new_conn function not found")
 	}
 	i.onConnClose = i.mod.ExportedFunction("on_conn_close")
 	if i.onConnClose == nil {
-		return fmt.Errorf("on_conn_close function now found")
+		return fmt.Errorf("on_conn_close function not found")
 	}
 	if i.bufferPtr == 0 && i.bufferSize == 0 {
 		networkBufferFunc := i.mod.ExportedFunction("network_buffer")
 		if networkBufferFunc == nil {
-			return fmt.Errorf("network_buffer function now found")
+			return fmt.Errorf("network_buffer function not found")
 		}
 		bufferPtrSize, err := i.mod.ExportedFunction("network_buffer").Call(ctx)
 		if err != nil {
@@ -145,8 +155,6 @@ func (i *Instance) Start(ctx context.Context) error {
 }
 
 func (i *Instance) Stop(ctx context.Context) error {
-	i.instanceLock.Lock()
-	defer i.instanceLock.Unlock()
 	b, _ := i.mod.Memory().Read(0, i.mod.Memory().Size())
 	memFile, err := os.Create(filepath.Join(i.cacheDir, "mem"))
 	if err != nil {
@@ -161,7 +169,9 @@ func (i *Instance) Stop(ctx context.Context) error {
 	return i.mod.Close(ctx)
 }
 
-func (i *Instance) connSend(_ context.Context, m api.Module, connid, offset uint32) (errno uint32) {
+func (i *Instance) connSend(_ context.Context, m api.Module, connid,
+	offset uint32) (errno uint32,
+) {
 	logger := slog.With("connid", connid, "offset", offset)
 	logger.Info("conn_send")
 	conn := i.getConnection(int(connid))
@@ -199,15 +209,21 @@ func (i *Instance) connClose(_ context.Context, m api.Module, connid uint32) (er
 	return
 }
 
-func (i *Instance) NewConn(conn io.ReadWriteCloser) int {
+func (i *Instance) NewConn(ctx context.Context, conn io.ReadWriteCloser) (int, error) {
 	// TODO: do we need this lock, or just when we use the network buffer?
 	i.instanceLock.Lock()
 	defer i.instanceLock.Unlock()
+	if i.connectionCount == 0 {
+		if err := i.Start(ctx); err != nil {
+			return 0, err
+		}
+	}
 	id := i.addConnection(conn)
+	i.connectionCount++
 	if _, err := i.onNewConn.Call(context.Background(), uint64(id)); err != nil {
 		slog.Error("on_new_conn", "err", err)
 	}
-	return id
+	return id, nil
 }
 
 func (i *Instance) OnConnRead(id int, b []byte) {
@@ -219,7 +235,7 @@ func (i *Instance) OnConnRead(id int, b []byte) {
 		slog.Error("on_conn_read", "err", err)
 	}
 }
-func (i *Instance) OnConnClose(id int) {
+func (i *Instance) OnConnClose(ctx context.Context, id int) error {
 	// TODO: do we need this lock, or just when we use the network buffer?
 	i.instanceLock.Lock()
 	defer i.instanceLock.Unlock()
@@ -227,10 +243,14 @@ func (i *Instance) OnConnClose(id int) {
 		slog.Error("on_conn_close", "err", err)
 	}
 	i.removeConnection(id)
+	i.connectionCount--
+	if i.connectionCount == 0 {
+		return i.Stop(ctx)
+	}
+	return nil
 }
 
 func (i *Instance) getConnection(id int) io.ReadWriteCloser {
-
 	if int(id) > len(i.connections) {
 		return nil
 	}
@@ -268,13 +288,16 @@ func (i *Instance) Listen(ctx context.Context, addr string) error {
 			return err
 		}
 		slog.Info("New connection", "conn", conn)
-		id := i.NewConn(conn)
+		id, err := i.NewConn(ctx, conn)
+		if err != nil {
+			return err
+		}
 		go func() {
 			buf := make([]byte, len(i.networkBuffer))
 			for {
 				ln, err := conn.Read(buf)
 				if err != nil {
-					i.OnConnClose(id)
+					_ = i.OnConnClose(ctx, id)
 					return
 				}
 				i.OnConnRead(id, buf[:ln])

@@ -32,6 +32,7 @@ import (
 var templatesFS embed.FS
 
 type Service struct {
+	runtime *Runtime
 	t       *template.Template
 	cfg     Config
 	builder *Builder
@@ -46,6 +47,17 @@ type Config struct {
 
 type MP map[string]interface{}
 
+func mkdirIfNoExist(path string) error {
+	fi, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return os.Mkdir(path, 0777)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("Path %q already exists and is not a directory", path)
+	}
+	return nil
+}
+
 func NewService(cfg Config, dataDir string) (*Service, error) {
 	var t *template.Template
 	t, err := template.New("").Funcs(template.FuncMap{
@@ -58,13 +70,25 @@ func NewService(cfg Config, dataDir string) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error parsing templates: %w", err)
 	}
-
-	return &Service{
+	s := &Service{
 		t:       t,
 		cfg:     cfg,
+		runtime: NewRuntime(filepath.Join(dataDir, "module-cache")),
 		builder: NewBuilder(),
 		dataDir: dataDir,
-	}, nil
+	}
+	if err := mkdirIfNoExist(s.appDir()); err != nil {
+		return nil, err
+	}
+	if err := mkdirIfNoExist(filepath.Join(dataDir, "module-cache")); err != nil {
+		return nil, err
+	}
+
+	if err := s.runtime.LoadApplications(context.TODO(), s.appDir()); err != nil {
+		return nil, err
+	}
+
+	return s, nil
 }
 
 var upgrader = websocket.Upgrader{}
@@ -116,7 +140,7 @@ func (s *Service) buildStatus(w http.ResponseWriter, r *http.Request, p httprout
 			return nil, fmt.Errorf("Build not found")
 		}
 		data = MP{"build": build.templateData()}
-		if data["build"].(MP)["completed"].(bool) == false {
+		if !data["build"].(MP)["completed"].(bool) {
 			// Build is ongoing, send status
 			return data, nil
 		}
@@ -128,7 +152,6 @@ func (s *Service) buildStatus(w http.ResponseWriter, r *http.Request, p httprout
 
 		build.Lock()
 		defer build.Unlock()
-
 		// TODO: also try and run the wasm here, return any errors. We should
 		// not deploy things that will fail to run.
 		slog.Info("Build complete, creating result", "id", build.ID)
@@ -153,13 +176,20 @@ func (s *Service) buildStatus(w http.ResponseWriter, r *http.Request, p httprout
 		data["result_name"] = hash
 		_ = wasmFile.Close()
 		_ = htmlFile.Close()
-		appDir := filepath.Join(s.dataDir, hash)
+		appDir := s.appDir(hash)
 		if _, err := os.Stat(appDir); !os.IsNotExist(err) {
 			// Cleanup if this already exists.
 			_ = os.RemoveAll(build.dir)
 		}
 		if err := os.Rename(build.dir, appDir); err != nil {
 			return nil, fmt.Errorf("error creating app dir: %w", err)
+		}
+
+		fmt.Fprintln(build.Logs, "Starting application")
+		if err := s.runtime.AddApplication(context.TODO(), appDir); err != nil {
+			fmt.Fprintf(build.Logs, "Error starting application: %v\n", err)
+			data["build"].(MP)["error"] = err.Error()
+			_ = os.RemoveAll(appDir)
 		}
 		return data, nil
 	})
@@ -218,31 +248,57 @@ func (s *Service) createHandler(w http.ResponseWriter, r *http.Request, p httpro
 	})
 }
 func (s *Service) wsHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	subdomain, found := strings.CutSuffix(r.Host, s.cfg.host)
+	subdomain, found := strings.CutSuffix(r.Host, "."+s.cfg.host)
 	if !found || subdomain == "" {
 		s.errorResp(w, http.StatusNotFound, fmt.Errorf("not found"))
 		return
 	}
+	i := s.runtime.GetInstance(subdomain)
+	if i == nil {
+		s.errorResp(w, http.StatusNotFound, fmt.Errorf("not found"))
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.errorResp(w, http.StatusBadRequest, err)
 		return
 	}
+	connID, err := i.NewConn(context.TODO(), websocketConnWriter{conn: conn})
+	if err != nil {
+		s.errorResp(w, http.StatusInternalServerError, err)
+		return
+	}
 	for {
 		_, msg, err := conn.ReadMessage()
-		fmt.Println(msg, err)
+		fmt.Println("conn.ReadMessage", msg, err)
 		if err != nil {
-			s.errorResp(w, http.StatusBadRequest, err)
-			return
+			break
 		}
-		_ = conn.WriteMessage(websocket.BinaryMessage, []byte("1"))
+		i.OnConnRead(connID, msg)
 	}
+	i.OnConnClose(context.TODO(), connID)
 }
 
+type websocketConnWriter struct {
+	conn *websocket.Conn
+}
+
+var _ io.ReadWriteCloser = websocketConnWriter{}
+
+func (w websocketConnWriter) Read(b []byte) (n int, err error) {
+	return 0, fmt.Errorf("unimplemented")
+}
+func (w websocketConnWriter) Write(b []byte) (n int, err error) {
+	return len(b), w.conn.WriteMessage(websocket.BinaryMessage, b)
+}
+func (w websocketConnWriter) Close() (err error) {
+	return w.conn.Close()
+}
 func (s *Service) appInfoHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	s.templateErrorHandler(w, "info.html", func() (data MP, err error) {
 		name := p.ByName("name")
-		appDir := filepath.Join(s.dataDir, name)
+		appDir := s.appDir(name)
 		if _, err := os.Stat(appDir); os.IsNotExist(err) {
 			w.WriteHeader(http.StatusNotFound)
 			return nil, fmt.Errorf("Application %q not found", name)
@@ -264,8 +320,12 @@ func (s *Service) appInfoHandler(w http.ResponseWriter, r *http.Request, p httpr
 	})
 }
 
+func (s *Service) appDir(path ...string) string {
+	return filepath.Join(append([]string{s.dataDir, "apps"}, path...)...)
+}
+
 func (s *Service) indexHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	entries, err := ioutil.ReadDir(s.dataDir)
+	entries, err := ioutil.ReadDir(s.appDir())
 	if err != nil {
 		s.errorResp(w, http.StatusInternalServerError, err)
 		return
@@ -300,7 +360,7 @@ func (s *Service) methodNotAllowedHandler() http.Handler {
 
 func (s *Service) appSourceHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	name, _ := strings.CutSuffix(r.Host, "."+s.cfg.host)
-	appDir := filepath.Join(s.dataDir, name)
+	appDir := s.appDir(name)
 	if _, err := os.Stat(appDir); os.IsNotExist(err) {
 		http.Error(w, fmt.Errorf("Application %q not found", name).Error(), http.StatusNotFound)
 		return
@@ -405,14 +465,6 @@ func main() {
 
 	slog.Info("Listening", "port", cfg.port)
 	panic(http.ListenAndServe(":"+fmt.Sprint(cfg.port), logMiddleware(service.Handler())))
-
-	i, err := NewInstance(context.Background(), "", "", counterWasm)
-	if err != nil {
-		log.Panicln(err)
-	}
-	if err := i.Listen(context.Background(), ":8080"); err != nil {
-		log.Panicln(err)
-	}
 }
 
 func hashResult(wasm, html io.Reader) (string, error) {

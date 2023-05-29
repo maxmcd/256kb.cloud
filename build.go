@@ -88,7 +88,7 @@ func (b *Builder) SubmitBuild(dir, command string) *Build {
 }
 
 func (b *Builder) build(build *Build) error {
-	cmd := exec.Command("bash", "-c", build.Command)
+	cmd := exec.Command("bash", "-cx", build.Command)
 	cmd.Stdout = build.Logs
 	cmd.Stderr = build.Logs
 	cmd.Dir = build.dir
