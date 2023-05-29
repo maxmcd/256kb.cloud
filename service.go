@@ -128,6 +128,9 @@ func (s *Service) buildStatus(w http.ResponseWriter, r *http.Request, p httprout
 
 		build.Lock()
 		defer build.Unlock()
+
+		// TODO: also try and run the wasm here, return any errors. We should
+		// not deploy things that will fail to run.
 		slog.Info("Build complete, creating result", "id", build.ID)
 		if _, err := os.Stat(build.dir); os.IsNotExist(err) {
 			return nil, fmt.Errorf("build directory is missing")
@@ -403,7 +406,7 @@ func main() {
 	slog.Info("Listening", "port", cfg.port)
 	panic(http.ListenAndServe(":"+fmt.Sprint(cfg.port), logMiddleware(service.Handler())))
 
-	i, err := NewInstance(context.Background(), counterWasm, "")
+	i, err := NewInstance(context.Background(), "", "", counterWasm)
 	if err != nil {
 		log.Panicln(err)
 	}
