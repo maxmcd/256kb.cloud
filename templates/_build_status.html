@@ -2,10 +2,18 @@
   <div class="box text-box">
     <p class="error">{{ .error }}</p>
   </div>
+{{ else if .previous_result }}
+  <div class="box text-box">
+    <b>Found an existing build with an identical source:</b><br />
+    Continue to the application page >
+    <a href="/{{ .previous_result.hash }}/info"
+      >{{ .previous_result.hash }}/info</a
+    >
+  </div>
 {{ else }}
   <div
     {{ if ne .build.completed true -}}
-      hx-get="/new/build-status?id={{ .build.id }}" hx-trigger="every 1s"
+      hx-get="/new/build-status?hash={{ .build.hash }}" hx-trigger="every 1s"
     {{- end }}
     class="build-status"
   >
@@ -44,7 +52,7 @@
             {{ else }}
               <b>Build completed successfully:</b><br />
               Continue to the application page >
-              <a href="/{{ .result_name }}/info">{{ .result_name }}/info</a>
+              <a href="/{{ .build.ID }}/info">{{ .build.ID }}/info</a>
             {{ end }}
           </p>
         </div>

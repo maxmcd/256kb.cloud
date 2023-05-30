@@ -104,7 +104,7 @@ func (i *Instance) Start(ctx context.Context) error {
 		return err
 	}
 
-	memFile, err := os.Open(filepath.Join(i.cacheDir, "mem"))
+	memFile, err := os.Open(filepath.Join(i.dataDir, "mem"))
 	if !os.IsNotExist(err) {
 		b, _ := i.mod.Memory().Read(0, i.mod.Memory().Size())
 		idx := 0
@@ -156,7 +156,7 @@ func (i *Instance) Start(ctx context.Context) error {
 
 func (i *Instance) Stop(ctx context.Context) error {
 	b, _ := i.mod.Memory().Read(0, i.mod.Memory().Size())
-	memFile, err := os.Create(filepath.Join(i.cacheDir, "mem"))
+	memFile, err := os.Create(filepath.Join(i.dataDir, "mem"))
 	if err != nil {
 		return err
 	}

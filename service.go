@@ -15,10 +15,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -28,8 +28,12 @@ import (
 	"github.com/julienschmidt/httprouter"
 )
 
-//go:embed templates/*.html
-var templatesFS embed.FS
+var (
+
+	//go:embed templates/*.html
+	templatesFS        embed.FS
+	tinyGoBuildCommand = "tinygo build -x -o main.wasm -target wasi main.go"
+)
 
 type Service struct {
 	runtime *Runtime
@@ -37,12 +41,15 @@ type Service struct {
 	cfg     Config
 	builder *Builder
 	dataDir string
+
+	tinygoVersion string
 }
 
 type Config struct {
-	host string
-	dev  bool
-	port int
+	host          string
+	subdomainHost string
+	dev           bool
+	port          int
 }
 
 type MP map[string]interface{}
@@ -83,6 +90,12 @@ func NewService(cfg Config, dataDir string) (*Service, error) {
 	if err := mkdirIfNoExist(filepath.Join(dataDir, "module-cache")); err != nil {
 		return nil, err
 	}
+
+	b, err := exec.Command("tinygo", "version").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("error running 'tinygo version': %w: %s", err, string(b))
+	}
+	s.tinygoVersion = string(b)
 
 	if err := s.runtime.LoadApplications(context.TODO(), s.appDir()); err != nil {
 		return nil, err
@@ -134,8 +147,7 @@ func (s *Service) newHandler(w http.ResponseWriter, r *http.Request, p httproute
 
 func (s *Service) buildStatus(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	s.partialErrorHandler(w, "_build_status.html", func() (data MP, err error) {
-		buildID, _ := strconv.Atoi(r.URL.Query().Get("id"))
-		build := s.builder.Get(buildID)
+		build := s.builder.Get(r.URL.Query().Get("hash"))
 		if build == nil {
 			return nil, fmt.Errorf("Build not found")
 		}
@@ -154,31 +166,14 @@ func (s *Service) buildStatus(w http.ResponseWriter, r *http.Request, p httprout
 		defer build.Unlock()
 		// TODO: also try and run the wasm here, return any errors. We should
 		// not deploy things that will fail to run.
-		slog.Info("Build complete, creating result", "id", build.ID)
+		slog.Info("Build complete, starting application", "id", build.Hash)
 		if _, err := os.Stat(build.dir); os.IsNotExist(err) {
 			return nil, fmt.Errorf("build directory is missing")
 		}
-		s.builder.Delete(build.ID)
-		wasmFile, err := os.Open(filepath.Join(build.dir, "main.wasm"))
-		if err != nil {
-			return nil, fmt.Errorf("error opening build result: %w", err)
-		}
-		htmlFile, err := os.Open(filepath.Join(build.dir, "index.html"))
-		if err != nil {
-			return nil, fmt.Errorf("error opening build result: %w", err)
-		}
-		slog.Info("Computing hash", "id", build.ID)
-		hash, err := hashResult(wasmFile, htmlFile)
-		if err != nil {
-			return nil, fmt.Errorf("error hashing build result: %w", err)
-		}
-		slog.Info("Hash calculated", "id", build.ID, "hash", hash)
-		data["result_name"] = hash
-		_ = wasmFile.Close()
-		_ = htmlFile.Close()
-		appDir := s.appDir(hash)
+		s.builder.Delete(build.Hash)
+		appDir := s.appDir(build.Hash)
 		if _, err := os.Stat(appDir); !os.IsNotExist(err) {
-			// Cleanup if this already exists.
+			// Cleanup if this app already exists.
 			_ = os.RemoveAll(build.dir)
 		}
 		if err := os.Rename(build.dir, appDir); err != nil {
@@ -242,13 +237,20 @@ func (s *Service) createHandler(w http.ResponseWriter, r *http.Request, p httpro
 			0666); err != nil {
 			return data, err
 		}
-		build := s.builder.SubmitBuild(buildDir, "tinygo build -x -o main.wasm -target wasi main.go")
+		hash, err := hashResult(tinyGoBuildCommand, s.tinygoVersion, r.FormValue("server_source"), r.FormValue("html_source"))
+		if err != nil {
+			return nil, err
+		}
+		if s.runtime.GetInstance(hash) != nil {
+			data["previous_result"] = MP{"hash": hash}
+		}
+		build := s.builder.SubmitBuild(hash, buildDir, tinyGoBuildCommand)
 		data["build"] = build.templateData()
 		return data, nil
 	})
 }
 func (s *Service) wsHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	subdomain, found := strings.CutSuffix(r.Host, "."+s.cfg.host)
+	subdomain, found := strings.CutSuffix(r.Host, "."+s.cfg.subdomainHost)
 	if !found || subdomain == "" {
 		s.errorResp(w, http.StatusNotFound, fmt.Errorf("not found"))
 		return
@@ -348,7 +350,7 @@ func (s *Service) appHandler(w http.ResponseWriter, r *http.Request, p httproute
 	name := p.ByName("name")
 	s.executeTemplate(w, "app.html", MP{
 		"name":   name,
-		"iframe": "//" + name + "." + s.cfg.host,
+		"iframe": "//" + name + "." + s.cfg.subdomainHost,
 	})
 }
 
@@ -359,7 +361,7 @@ func (s *Service) methodNotAllowedHandler() http.Handler {
 }
 
 func (s *Service) appSourceHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	name, _ := strings.CutSuffix(r.Host, "."+s.cfg.host)
+	name, _ := strings.CutSuffix(r.Host, "."+s.cfg.subdomainHost)
 	appDir := s.appDir(name)
 	if _, err := os.Stat(appDir); os.IsNotExist(err) {
 		http.Error(w, fmt.Errorf("Application %q not found", name).Error(), http.StatusNotFound)
@@ -411,20 +413,12 @@ func (s *Service) Handler() http.Handler {
 	mainRouter.GET("/:name/info", s.appInfoHandler)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check if we're serving from a subdomain like app_name.256kb.
-		subdomain, found := strings.CutSuffix(r.Host, s.cfg.host)
-		if !found {
-			s.errorResp(w, http.StatusNotFound, fmt.Errorf("not found"))
-			return
-		}
-		// If we aren't, or if it's a known subdomain, use the main router.
-		if subdomain == "www" || subdomain == "" {
-			mainRouter.ServeHTTP(w, r)
-		} else {
+		if strings.HasSuffix(r.Host, s.cfg.subdomainHost) {
 			appSubdomainRouter.ServeHTTP(w, r)
+		} else {
+			mainRouter.ServeHTTP(w, r)
 		}
 	})
-
 }
 
 func makeAppDir() (dir string, err error) {
@@ -448,9 +442,14 @@ func main() {
 		host: "localhost:3001",
 	}
 	flag.StringVar(&cfg.host, "host", "localhost:3001", "The HTTP Host the application will accept requests from.")
+	flag.StringVar(&cfg.subdomainHost, "subdomain-host", "",
+		"The HTTP Host where application subdomains will be served, defaults to value of 'host' if unset")
 	flag.BoolVar(&cfg.dev, "dev", false, "Run the server in development mode")
 	flag.IntVar(&cfg.port, "port", 3000, "Listen to me...")
 	flag.Parse()
+	if cfg.subdomainHost == "" {
+		cfg.subdomainHost = cfg.host
+	}
 
 	appDir, err := makeAppDir()
 	if err != nil {
@@ -467,13 +466,13 @@ func main() {
 	panic(http.ListenAndServe(":"+fmt.Sprint(cfg.port), logMiddleware(service.Handler())))
 }
 
-func hashResult(wasm, html io.Reader) (string, error) {
+func hashResult(in ...string) (string, error) {
 	h := sha256.New()
-	if _, err := io.Copy(h, wasm); err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(h, html); err != nil {
-		return "", err
+	for _, i := range in {
+		if _, err := fmt.Fprint(h, i); err != nil {
+			// TODO: will this ever fail?
+			return "", err
+		}
 	}
 	return bytesToBase32Hash(h.Sum(nil)), nil
 }

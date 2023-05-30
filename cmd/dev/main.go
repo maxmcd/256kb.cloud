@@ -215,7 +215,7 @@ func (br *BuilderRunner) build() (binaryLocation string, err error) {
 }
 
 func (br *BuilderRunner) start(binaryLocation string) (err error) {
-	br.cmd = exec.Command(binaryLocation, "-dev")
+	br.cmd = exec.Command(binaryLocation, "-dev", "-subdomain-host", "localhost:3000")
 	br.cmd.Env = os.Environ()
 	br.cmd.Env = append(br.cmd.Env, "PORT=3000")
 	br.cmd.Stdout = os.Stdout

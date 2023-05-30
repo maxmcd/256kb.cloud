@@ -14,7 +14,7 @@ import (
 type Build struct {
 	sync.Mutex
 
-	ID          int
+	Hash        string
 	CreatedAt   time.Time
 	CompletedAt time.Time
 	ExitCode    *int
@@ -28,7 +28,7 @@ func (b *Build) templateData() MP {
 	b.Lock()
 	defer b.Unlock()
 	return MP{
-		"id":           b.ID,
+		"hash":         b.Hash,
 		"completed":    !b.CompletedAt.IsZero(),
 		"time_seconds": b.timeSeconds(),
 		"error":        b.Error,
@@ -45,36 +45,35 @@ func (b *Build) timeSeconds() string {
 type Builder struct {
 	lock    sync.Mutex
 	counter int
-	builds  map[int]*Build
+	builds  map[string]*Build
 }
 
 func NewBuilder() *Builder {
-	return &Builder{builds: map[int]*Build{}}
+	return &Builder{builds: map[string]*Build{}}
 }
 
-func (b *Builder) Get(id int) *Build {
+func (b *Builder) Get(hash string) *Build {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	return b.builds[id]
+	return b.builds[hash]
 }
 
-func (b *Builder) Delete(id int) {
+func (b *Builder) Delete(hash string) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	delete(b.builds, id)
+	delete(b.builds, hash)
 }
 
-func (b *Builder) SubmitBuild(dir, command string) *Build {
+func (b *Builder) SubmitBuild(hash, dir, command string) *Build {
 	b.lock.Lock()
-	b.counter++
 	build := &Build{
-		ID:        b.counter,
+		Hash:      hash,
 		CreatedAt: time.Now(),
 		Command:   command,
 		dir:       dir,
 		Logs:      &bytes.Buffer{},
 	}
-	b.builds[build.ID] = build
+	b.builds[hash] = build
 	b.lock.Unlock()
 
 	go func() {
@@ -96,7 +95,7 @@ func (b *Builder) build(build *Build) error {
 
 	err := cmd.Run()
 	build.Lock()
-	slog.Info("Build complete", "id", build.ID)
+	slog.Info("Build complete", "id", build.Hash)
 	build.Error = err
 	c := cmd.ProcessState.ExitCode()
 	build.ExitCode = &c

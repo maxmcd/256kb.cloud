@@ -37,3 +37,11 @@ BenchmarkInstance/filecache-8         	    1683	    661342 ns/op	  623543 B/op	 
 BenchmarkInstance/no_cache
 BenchmarkInstance/no_cache-8          	     403	   3026209 ns/op	 3222913 B/op	    2580 allocs/op
 ```
+
+## 2023-05-29
+
+A few things to do:
+
+1. Hash input not output, figure out how to include tinygo version.
+2. Capture logs and events
+3. Fix deployed subdomain
