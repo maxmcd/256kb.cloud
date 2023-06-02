@@ -91,3 +91,31 @@ func BenchmarkRestore(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkRead(b *testing.B) {
+	var t T = b
+	dataDir := b.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "main.wasm"), counterWasm, 0777); err != nil {
+		t.Fatal(err)
+	}
+	i, err := NewInstance(context.Background(), b.TempDir(), dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type rwc struct {
+		io.Reader
+		io.Writer
+		io.Closer
+	}
+	connID, err := i.NewConn(context.Background(),
+		rwc{Reader: bytes.NewBuffer(nil), Writer: io.Discard, Closer: io.NopCloser(bytes.NewBuffer(nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeBytes := []byte("words")
+	for x := 0; x < b.N; x++ {
+		for y := 0; y < 100; y++ {
+			i.OnConnRead(connID, writeBytes)
+		}
+	}
+}

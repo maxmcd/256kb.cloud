@@ -13,7 +13,7 @@
         <br />
         <br />
         <div id="build-status">
-          {{ if .build }}{{ partial "_build_status.html" . }}{{ end }}
+          {{ if .build }}{{ template "_build_status.html" . }}{{ end }}
         </div>
 
         <input

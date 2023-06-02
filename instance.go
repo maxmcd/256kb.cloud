@@ -46,12 +46,13 @@ type Instance struct {
 
 	cacheDir string
 	dataDir  string
+	stack    [2]uint64
 }
 
 func NewInstance(ctx context.Context, cacheDir, dataDir string) (*Instance, error) {
-	runtimeConfig := wazero.NewRuntimeConfig().
-		WithMemoryLimitPages(uint32(memoryLimitPages)). // limit to 256kb
-		WithCloseOnContextDone(true)                    // ensure we can cancel function calls
+	runtimeConfig := wazero.NewRuntimeConfigCompiler().
+		WithMemoryLimitPages(uint32(memoryLimitPages)) // limit to 256kb
+		// WithCloseOnContextDone(true)                    // ensure we can cancel function calls
 
 	if cacheDir != "" {
 		cache, err := wazero.NewCompilationCacheWithDir(cacheDir)
@@ -79,7 +80,9 @@ func NewInstance(ctx context.Context, cacheDir, dataDir string) (*Instance, erro
 
 	hostModuleBuilder := i.runtime.NewHostModuleBuilder("env")
 	builder := hostModuleBuilder.NewFunctionBuilder()
-	builder.WithFunc(i.connSend).Export("conn_send")
+	builder.WithGoModuleFunction(api.GoModuleFunc(i.connSend),
+		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
+		[]api.ValueType{api.ValueTypeI32}).Export("conn_send")
 	builder.WithFunc(i.connClose).Export("conn_close")
 	if _, err := hostModuleBuilder.Instantiate(ctx); err != nil {
 		return nil, err
@@ -123,6 +126,7 @@ func (i *Instance) Start(ctx context.Context) error {
 			if uint32(idx+n) == i.mod.Memory().Size() {
 				break
 			}
+			idx += n
 		}
 	}
 
@@ -169,36 +173,35 @@ func (i *Instance) Stop(ctx context.Context) error {
 	return i.mod.Close(ctx)
 }
 
-func (i *Instance) connSend(_ context.Context, m api.Module, connid,
-	offset uint32) (errno uint32,
-) {
-	logger := slog.With("connid", connid, "offset", offset)
-	logger.Info("conn_send")
-	conn := i.getConnection(int(connid))
+func (i *Instance) connSend(_ context.Context, m api.Module, stack []uint64) {
+	id := api.DecodeU32(stack[0])
+	offset := api.DecodeU32(stack[1])
+	conn := i.getConnection(uint64(id))
 	if conn == nil {
 		// TODO
-		logger.Error("conn doesn't exist")
+		// logger.Error("conn doesn't exist")
 		return
 	}
 	if offset > uint32(len(i.networkBuffer))-1 {
 		// TODO
-		logger.Error("offset is larger than network buffer", "len_network_buffer", len(i.networkBuffer))
+		// logger.Error("offset is larger than network buffer", "len_network_buffer", len(i.networkBuffer))
 		return
 	}
 	// TODO: writes block all execution, make a write pool
 	_, err := conn.Write(i.networkBuffer[:offset])
 	if err != nil {
 		// TODO
-		logger.Error("error writing to conn", "err", err)
+		// logger.Error("error writing to conn", "err", err)
 		return
 	}
-	return
+	// return value
+	stack[0] = 0
 }
 
 func (i *Instance) connClose(_ context.Context, m api.Module, connid uint32) (errno uint32) {
 	logger := slog.With("connid", connid)
 	logger.Info("connSend")
-	conn := i.getConnection(int(connid))
+	conn := i.getConnection(uint64(connid))
 	if conn == nil {
 		// TODO
 		logger.Error("conn doesn't exist", "connid", connid)
@@ -209,7 +212,7 @@ func (i *Instance) connClose(_ context.Context, m api.Module, connid uint32) (er
 	return
 }
 
-func (i *Instance) NewConn(ctx context.Context, conn io.ReadWriteCloser) (int, error) {
+func (i *Instance) NewConn(ctx context.Context, conn io.ReadWriteCloser) (uint64, error) {
 	// TODO: do we need this lock, or just when we use the network buffer?
 	i.instanceLock.Lock()
 	defer i.instanceLock.Unlock()
@@ -220,26 +223,27 @@ func (i *Instance) NewConn(ctx context.Context, conn io.ReadWriteCloser) (int, e
 	}
 	id := i.addConnection(conn)
 	i.connectionCount++
-	if _, err := i.onNewConn.Call(context.Background(), uint64(id)); err != nil {
+	if _, err := i.onNewConn.Call(context.TODO(), uint64(id)); err != nil {
 		slog.Error("on_new_conn", "err", err)
 	}
-	return id, nil
+	return uint64(id), nil
 }
 
-func (i *Instance) OnConnRead(id int, b []byte) {
+func (i *Instance) OnConnRead(id uint64, b []byte) {
 	i.instanceLock.Lock()
 	defer i.instanceLock.Unlock()
-	ln := copy(i.networkBuffer, b)
+	i.stack[0] = id
+	i.stack[1] = uint64(copy(i.networkBuffer, b))
 	// TODO: when b is larger than networkBuffer
-	if _, err := i.onConnRead.Call(context.Background(), uint64(id), uint64(ln)); err != nil {
+	if err := i.onConnRead.CallWithStack(context.TODO(), i.stack[:2]); err != nil {
 		slog.Error("on_conn_read", "err", err)
 	}
 }
-func (i *Instance) OnConnClose(ctx context.Context, id int) error {
+func (i *Instance) OnConnClose(ctx context.Context, id uint64) error {
 	// TODO: do we need this lock, or just when we use the network buffer?
 	i.instanceLock.Lock()
 	defer i.instanceLock.Unlock()
-	if _, err := i.onConnClose.Call(context.Background(), uint64(id)); err != nil {
+	if _, err := i.onConnClose.Call(context.TODO(), uint64(id)); err != nil {
 		slog.Error("on_conn_close", "err", err)
 	}
 	i.removeConnection(id)
@@ -250,7 +254,7 @@ func (i *Instance) OnConnClose(ctx context.Context, id int) error {
 	return nil
 }
 
-func (i *Instance) getConnection(id int) io.ReadWriteCloser {
+func (i *Instance) getConnection(id uint64) io.ReadWriteCloser {
 	if int(id) > len(i.connections) {
 		return nil
 	}
@@ -270,7 +274,7 @@ func (i *Instance) addConnection(conn io.ReadWriteCloser) int {
 	return len(i.connections)
 }
 
-func (i *Instance) removeConnection(id int) {
+func (i *Instance) removeConnection(id uint64) {
 	i.connLock.Lock()
 	defer i.connLock.Unlock()
 	i.connections[id-1] = nil

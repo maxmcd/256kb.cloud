@@ -43,9 +43,8 @@ func (b *Build) timeSeconds() string {
 }
 
 type Builder struct {
-	lock    sync.Mutex
-	counter int
-	builds  map[string]*Build
+	lock   sync.Mutex
+	builds map[string]*Build
 }
 
 func NewBuilder() *Builder {

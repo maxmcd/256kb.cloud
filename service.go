@@ -68,7 +68,8 @@ func mkdirIfNoExist(path string) error {
 func NewService(cfg Config, dataDir string) (*Service, error) {
 	var t *template.Template
 	t, err := template.New("").Funcs(template.FuncMap{
-		"partial": func(name string, data interface{}) (template.HTML, error) {
+		"yield": func(data interface{}) (template.HTML, error) {
+			name := data.(MP)["inner_template"].(string)
 			var buf bytes.Buffer
 			err := t.ExecuteTemplate(&buf, name, data)
 			return template.HTML(buf.String()), err
@@ -315,9 +316,10 @@ func (s *Service) appInfoHandler(w http.ResponseWriter, r *http.Request, p httpr
 			return nil, fmt.Errorf("error reading index.html: %w", err)
 		}
 		return MP{
-			"name":          name,
-			"server_source": string(serverSrc),
-			"html_source":   string(htmlSrc),
+			"name":           name,
+			"subdomain_host": s.cfg.subdomainHost,
+			"server_source":  string(serverSrc),
+			"html_source":    string(htmlSrc),
 		}, nil
 	})
 }
@@ -349,8 +351,9 @@ func (s *Service) indexHandler(w http.ResponseWriter, r *http.Request, p httprou
 func (s *Service) appHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	name := p.ByName("name")
 	s.executeTemplate(w, "app.html", MP{
-		"name":   name,
-		"iframe": "//" + name + "." + s.cfg.subdomainHost,
+		"hide_nav": true,
+		"name":     name,
+		"iframe":   "//" + name + "." + s.cfg.subdomainHost,
 	})
 }
 
