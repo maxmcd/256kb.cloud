@@ -23,9 +23,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"golang.org/x/exp/slog"
-
 	"github.com/julienschmidt/httprouter"
+	"golang.org/x/exp/slog"
 )
 
 var (
@@ -114,10 +113,13 @@ func (s *Service) errorResp(w http.ResponseWriter, code int, err error) {
 		err = fmt.Errorf(http.StatusText(code))
 	}
 	slog.Error("errorResp", "err", err)
-	if err := s.t.ExecuteTemplate(w, "error.html", MP{"error": err, "dev": s.cfg.dev}); err != nil {
-		slog.Error("Error rendering template", "err", err, "name", "error.html")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	s.executeTemplate(w, "error.html",
+		MP{
+			"error":       err,
+			"code":        code,
+			"status_text": http.StatusText(code),
+		},
+	)
 }
 func (s *Service) executeTemplate(w http.ResponseWriter, name string, data MP) {
 	if data == nil {
@@ -139,10 +141,27 @@ func (s *Service) executePartial(w http.ResponseWriter, name string, data MP) {
 }
 
 func (s *Service) newHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	serverSource := counterSrc
+	htmlSource := counterHTML
+
+	from := r.URL.Query().Get("from")
+	fromWrap := func(err error) error { return fmt.Errorf("error fetching source from existing application: %w", err) }
+	if from != "" {
+		var err error
+		if htmlSource, err = s.readAppFile(from, "index.html"); err != nil {
+			s.errorResp(w, http.StatusNotFound, fromWrap(err))
+			return
+		}
+		if serverSource, err = s.readAppFile(from, "main.go"); err != nil {
+			s.errorResp(w, http.StatusNotFound, fromWrap(err))
+			return
+		}
+	}
+
 	s.executeTemplate(w, "new.html", MP{
 		"source_filename": "main.go",
-		"server_source":   string(counterSrc),
-		"html_source":     string(counterHTML),
+		"server_source":   string(serverSource),
+		"html_source":     string(htmlSource),
 	})
 }
 
@@ -304,7 +323,7 @@ func (s *Service) appInfoHandler(w http.ResponseWriter, r *http.Request, p httpr
 		appDir := s.appDir(name)
 		if _, err := os.Stat(appDir); os.IsNotExist(err) {
 			w.WriteHeader(http.StatusNotFound)
-			return nil, fmt.Errorf("Application %q not found", name)
+			return nil, fmt.Errorf("application %q not found", name)
 		}
 
 		serverSrc, err := os.ReadFile(filepath.Join(appDir, "main.go"))
@@ -349,11 +368,15 @@ func (s *Service) indexHandler(w http.ResponseWriter, r *http.Request, p httprou
 }
 
 func (s *Service) appHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	name := p.ByName("name")
+	appName := p.ByName("name")
+	if s.runtime.GetInstance(appName) == nil {
+		s.errorResp(w, http.StatusNotFound, nil)
+		return
+	}
 	s.executeTemplate(w, "app.html", MP{
 		"hide_nav": true,
-		"name":     name,
-		"iframe":   "//" + name + "." + s.cfg.subdomainHost,
+		"name":     appName,
+		"iframe":   "//" + appName + "." + s.cfg.subdomainHost,
 	})
 }
 
@@ -363,17 +386,24 @@ func (s *Service) methodNotAllowedHandler() http.Handler {
 	})
 }
 
-func (s *Service) appSourceHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	name, _ := strings.CutSuffix(r.Host, "."+s.cfg.subdomainHost)
-	appDir := s.appDir(name)
+func (s *Service) readAppFile(appName, filename string) (src []byte, err error) {
+	appDir := s.appDir(appName)
 	if _, err := os.Stat(appDir); os.IsNotExist(err) {
-		http.Error(w, fmt.Errorf("Application %q not found", name).Error(), http.StatusNotFound)
-		return
+		return nil, fmt.Errorf("application %q not found", appName)
 	}
 
-	htmlSrc, err := os.ReadFile(filepath.Join(appDir, "index.html"))
+	htmlSrc, err := os.ReadFile(filepath.Join(appDir, filename))
 	if err != nil {
-		http.Error(w, fmt.Errorf("error reading index.html: %w", err).Error(), http.StatusInternalServerError)
+		return nil, fmt.Errorf("error reading index.html: %w", err)
+	}
+	return htmlSrc, nil
+}
+
+func (s *Service) appSourceHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	appName, _ := strings.CutSuffix(r.Host, "."+s.cfg.subdomainHost)
+	htmlSrc, err := s.readAppFile(appName, "index.html")
+	if err != nil {
+		s.errorResp(w, http.StatusNotFound, err)
 		return
 	}
 	_, _ = w.Write(htmlSrc)
@@ -387,9 +417,15 @@ func (s *Service) Handler() http.Handler {
 	mainRouter.MethodNotAllowed = namedPathRouter
 	mainRouter.NotFound = namedPathRouter
 	namedPathRouter.MethodNotAllowed = s.methodNotAllowedHandler()
+	namedPathRouter.NotFound = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.errorResp(w, http.StatusNotFound, nil)
+	})
 	// Router for apps serving on their own domains
 	appSubdomainRouter := httprouter.New()
 	appSubdomainRouter.MethodNotAllowed = s.methodNotAllowedHandler()
+	appSubdomainRouter.NotFound = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.errorResp(w, http.StatusNotFound, nil)
+	})
 
 	namedPathRouter.GET("/new", s.newHandler)
 	namedPathRouter.GET("/health", func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
@@ -416,6 +452,7 @@ func (s *Service) Handler() http.Handler {
 	mainRouter.GET("/:name/info", s.appInfoHandler)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println(r.Host, s.cfg.subdomainHost, strings.HasSuffix(r.Host, s.cfg.subdomainHost))
 		if strings.HasSuffix(r.Host, s.cfg.subdomainHost) {
 			appSubdomainRouter.ServeHTTP(w, r)
 		} else {

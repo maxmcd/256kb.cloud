@@ -1,3 +1,10 @@
-:(
-<br />
-{{ .error }}
+<div class="container">
+  <div class="row">
+    <div class="col-sm-12">
+      <h3>{{ .code }} {{ .status_text }} :(</h3>
+      <div class="box text-box">
+        {{ .error }}
+      </div>
+    </div>
+  </div>
+</div>

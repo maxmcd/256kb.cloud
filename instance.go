@@ -19,7 +19,7 @@ import (
 
 var (
 	memoryLimitPages = 4
-	//go:embed examples/tinygo/counter/counter.wasm
+	//go:embed examples/tinygo/counter/main.wasm
 	counterWasm []byte
 	//go:embed examples/tinygo/counter/index.html
 	counterHTML []byte
@@ -80,6 +80,7 @@ func NewInstance(ctx context.Context, cacheDir, dataDir string) (*Instance, erro
 
 	hostModuleBuilder := i.runtime.NewHostModuleBuilder("env")
 	builder := hostModuleBuilder.NewFunctionBuilder()
+
 	builder.WithGoModuleFunction(api.GoModuleFunc(i.connSend),
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
 		[]api.ValueType{api.ValueTypeI32}).Export("conn_send")

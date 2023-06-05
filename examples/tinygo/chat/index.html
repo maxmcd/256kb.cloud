@@ -12,7 +12,7 @@
 
 <body>
     <script>
-        ws = new WebSocket("wss://" + window.location.host + window.location.pathname + "ws");
+        ws = new WebSocket("ws://" + window.location.host + window.location.pathname + "ws");
         ws.onmessage = (e) => {
             e.data.text().then((e) => document.getElementById("counter").innerText = e)
         }

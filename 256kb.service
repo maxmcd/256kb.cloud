@@ -1,0 +1,12 @@
+[Unit]
+Description=256kb
+
+[Service]
+User=root
+Group=root
+Restart=on-failure
+ExecStart=/bin/sh -lc "/root/app/256kb.cloud -host 256kb.cloud -subdomain-host 256kb.app -port 80"
+WorkingDirectory=/root/app
+
+[Install]
+WantedBy=multi-user.target
