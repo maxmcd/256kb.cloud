@@ -11,10 +11,21 @@
     <div class="row">
       <div class="col-sm-12">
         <h3><a href="/{{ .name }}/info">{{ .name }}</a></h3>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-sm-12">
+        <iframe
+          class="app-info-iframe"
+          src="{{ .iframe }}"
+          frameborder="0"
+        ></iframe>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-sm-12">
         <p>
-          <b>Open Application: </b><a href="/{{ .name }}">{{ .name }}</a>
-          <br />
-          <b>Open Subdomain: </b
+          <b>Open Application: </b
           ><a href="//{{ .name }}.{{ .subdomain_host }}"
             >https://{{ .name }}.{{ .subdomain_host }}</a
           >
@@ -22,7 +33,10 @@
           <b>Connect to WebSocket: </b>
           wss://{{ .name }}.{{ .subdomain_host }}/ws
           <br />
-          <b><a href="/new?from={{ .name }}">Edit this appliction</a></b>
+          <form action="/new?from={{ .name }}">
+            <button type="submit">Edit this appliction</button>
+          </form>
+
         </p>
       </div>
     </div>

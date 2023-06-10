@@ -21,8 +21,8 @@ func network_buffer() (ptrSize uint64) {
 //export conn_shutdown
 func conn_shutdown(connid uint32) uint32
 
-//export conn_send
-func conn_send(connid, offset uint32) uint32
+//export conn_write
+func conn_write(connid, offset uint32) uint32
 
 //export conn_closed
 func conn_closed(connid uint32) {}
@@ -34,11 +34,11 @@ func conn_recv(connid, offset uint32) {
 		members[connid] = struct{}{}
 		len := copy(networkBuffer[0:], []byte("0: welcome, you are connection "+strInt+"\n"))
 
-		conn_send(connid, uint32(len))
+		conn_write(connid, uint32(len))
 		len = copy(networkBuffer[0:], []byte("connection "+strInt+" joined the chat\n"))
 		for member := range members {
 			if member != connid {
-				conn_send(member, uint32(len))
+				conn_write(member, uint32(len))
 			}
 		}
 	}
@@ -48,7 +48,7 @@ func conn_recv(connid, offset uint32) {
 	copy(networkBuffer[0:], []byte(label))
 	for member := range members {
 		if member != connid {
-			conn_send(member, offset+uint32(len(label)))
+			conn_write(member, offset+uint32(len(label)))
 		}
 	}
 }

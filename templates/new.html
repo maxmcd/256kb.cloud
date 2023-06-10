@@ -5,12 +5,27 @@
       <form hx-post="" hx-target="#build-status">
         <div class="row">
           <div class="col-sm-10"></div>
-          <div class="col-sm-2 align-items-right">
-            <button type="submit">Submit</button>
+        </div>
+        <div class="row">
+          <div class="col-sm-3">
+            <p>
+              <input type="text" placeholder="Title" />
+            </p>
+          </div>
+          <div class="col-sm-9 align-items-right">
+            <p>
+              <button type="submit">Submit</button>
+            </p>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-sm-5">
+            <p>
+              <input type="text" placeholder="Description" />
+            </p>
           </div>
         </div>
 
-        <br />
         <br />
         <div id="build-status">
           {{ if .build }}{{ template "_build_status.html" . }}{{ end }}

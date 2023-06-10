@@ -25,6 +25,9 @@ deploy_linux:
 	rsync -avz 256kb.service  root@5.161.53.66:/usr/lib/systemd/system/256kb.service
 	ssh root@5.161.53.66 "systemctl daemon-reload && service 256kb restart && service 256kb status"
 
+tail_logs:
+	ssh root@5.161.53.66 "journalctl -f -u 256kb"
+
 .PHONY: run
 run: build
 	go run .

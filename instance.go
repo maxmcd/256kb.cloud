@@ -81,9 +81,9 @@ func NewInstance(ctx context.Context, cacheDir, dataDir string) (*Instance, erro
 	hostModuleBuilder := i.runtime.NewHostModuleBuilder("env")
 	builder := hostModuleBuilder.NewFunctionBuilder()
 
-	builder.WithGoModuleFunction(api.GoModuleFunc(i.connSend),
+	builder.WithGoModuleFunction(api.GoModuleFunc(i.connWrite),
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32},
-		[]api.ValueType{api.ValueTypeI32}).Export("conn_send")
+		[]api.ValueType{api.ValueTypeI32}).Export("conn_write")
 	builder.WithFunc(i.connClose).Export("conn_close")
 	if _, err := hostModuleBuilder.Instantiate(ctx); err != nil {
 		return nil, err
@@ -174,7 +174,7 @@ func (i *Instance) Stop(ctx context.Context) error {
 	return i.mod.Close(ctx)
 }
 
-func (i *Instance) connSend(_ context.Context, m api.Module, stack []uint64) {
+func (i *Instance) connWrite(_ context.Context, m api.Module, stack []uint64) {
 	id := api.DecodeU32(stack[0])
 	offset := api.DecodeU32(stack[1])
 	conn := i.getConnection(uint64(id))

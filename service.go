@@ -32,6 +32,7 @@ var (
 	//go:embed templates/*.html
 	templatesFS        embed.FS
 	tinyGoBuildCommand = "tinygo build -x -o main.wasm -target wasi main.go"
+	wsUpgrader         = websocket.Upgrader{}
 )
 
 type Service struct {
@@ -104,8 +105,6 @@ func NewService(cfg Config, dataDir string) (*Service, error) {
 	return s, nil
 }
 
-var upgrader = websocket.Upgrader{}
-
 func (s *Service) errorResp(w http.ResponseWriter, code int, err error) {
 	w.Header().Add("Content-Type", "text/html")
 	w.WriteHeader(code)
@@ -134,10 +133,21 @@ func (s *Service) executePartial(w http.ResponseWriter, name string, data MP) {
 		data = MP{}
 	}
 	data["dev"] = s.cfg.dev
-	if err := s.t.ExecuteTemplate(w, name, data); err != nil {
+	if err := s.t.ExecuteTemplate(errSwallowingWriter{Writer: w}, name, data); err != nil {
 		slog.Error("Error rendering template", err, "name", name)
 		s.errorResp(w, http.StatusInternalServerError, err)
 	}
+}
+
+type errSwallowingWriter struct {
+	io.Writer
+}
+
+// Ignore write errors on render, we only want to deal with template execution
+// errors.
+func (e errSwallowingWriter) Write(b []byte) (n int, err error) {
+	n, _ = e.Writer.Write(b)
+	return n, nil
 }
 
 func (s *Service) newHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
@@ -281,11 +291,18 @@ func (s *Service) wsHandler(w http.ResponseWriter, r *http.Request, p httprouter
 		return
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.errorResp(w, http.StatusBadRequest, err)
 		return
 	}
+	go func() {
+		for range time.NewTicker(time.Second).C {
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {
+				return
+			}
+		}
+	}()
 	connID, err := i.NewConn(context.TODO(), websocketConnWriter{conn: conn})
 	if err != nil {
 		s.errorResp(w, http.StatusInternalServerError, err)
@@ -293,7 +310,6 @@ func (s *Service) wsHandler(w http.ResponseWriter, r *http.Request, p httprouter
 	}
 	for {
 		_, msg, err := conn.ReadMessage()
-		fmt.Println("conn.ReadMessage", msg, err)
 		if err != nil {
 			break
 		}
@@ -319,11 +335,11 @@ func (w websocketConnWriter) Close() (err error) {
 }
 func (s *Service) appInfoHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	s.templateErrorHandler(w, "info.html", func() (data MP, err error) {
-		name := p.ByName("name")
-		appDir := s.appDir(name)
+		appName := p.ByName("name")
+		appDir := s.appDir(appName)
 		if _, err := os.Stat(appDir); os.IsNotExist(err) {
 			w.WriteHeader(http.StatusNotFound)
-			return nil, fmt.Errorf("application %q not found", name)
+			return nil, fmt.Errorf("application %q not found", appName)
 		}
 
 		serverSrc, err := os.ReadFile(filepath.Join(appDir, "main.go"))
@@ -335,10 +351,11 @@ func (s *Service) appInfoHandler(w http.ResponseWriter, r *http.Request, p httpr
 			return nil, fmt.Errorf("error reading index.html: %w", err)
 		}
 		return MP{
-			"name":           name,
+			"name":           appName,
 			"subdomain_host": s.cfg.subdomainHost,
 			"server_source":  string(serverSrc),
 			"html_source":    string(htmlSrc),
+			"iframe":         "//" + appName + "." + s.cfg.subdomainHost,
 		}, nil
 	})
 }
@@ -452,7 +469,6 @@ func (s *Service) Handler() http.Handler {
 	mainRouter.GET("/:name/info", s.appInfoHandler)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println(r.Host, s.cfg.subdomainHost, strings.HasSuffix(r.Host, s.cfg.subdomainHost))
 		if strings.HasSuffix(r.Host, s.cfg.subdomainHost) {
 			appSubdomainRouter.ServeHTTP(w, r)
 		} else {

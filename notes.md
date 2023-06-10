@@ -48,7 +48,7 @@ A few things to do:
 
 ## 2023-06-01
 
-Set up a benchmark. 100 invocations of OnConnRead that trigger a wasm call of conn_send.
+Set up a benchmark. 100 invocations of OnConnRead that trigger a wasm call of conn_write.
 
 - `452 ns` with 0 allocs without `WithCloseOnContextDone(true)`
 - `854 ns` with 3 allocs with `WithCloseOnContextDone(true)`
