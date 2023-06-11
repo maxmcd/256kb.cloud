@@ -74,13 +74,6 @@ func (c Conn) Read(b []byte) (n int, err error) {
 
 func main() {} // required, but unused
 
-//export event_buffer
-func event_buffer() (ptrSize uint64) {
-	p := unsafe.Pointer(&eventBuffer)
-	ptr, size := uint32(uintptr(p)), uint32(len(eventBuffer))
-	return (uint64(ptr) << uint64(32)) | uint64(size)
-}
-
 type ConnectionType uint8
 
 const (
@@ -92,12 +85,20 @@ type IOEvent uint8
 
 const (
 	ReadIOEvent IOEvent = iota + 1
-	NewConnIOEvent
+	OpenIOEvent
 	CloseIOEvent
 )
 
 var eventBuffer [256]byte
 
+//export event_buffer
+func event_buffer() (ptrSize uint64) {
+	p := unsafe.Pointer(&eventBuffer)
+	ptr, size := uint32(uintptr(p)), uint32(len(eventBuffer))
+	return (uint64(ptr) << uint64(32)) | uint64(size)
+}
+
+//export on_event
 func on_event(offset uint32) {
 	buf := eventBuffer[:offset]
 	for i := 0; i < len(buf)/6; i++ {
@@ -106,7 +107,7 @@ func on_event(offset uint32) {
 		switch event {
 		case ReadIOEvent:
 			app.OnData(c)
-		case NewConnIOEvent:
+		case OpenIOEvent:
 			app.OnOpen(c, ConnectionType(buf[(i*6)+1]))
 		case CloseIOEvent:
 			app.OnClose(c)
@@ -118,7 +119,7 @@ func on_event(offset uint32) {
 func conn_close(connid uint32) uint32
 
 //export conn_read
-func conn_read(connid, ptr, offset uint32) uint64
+func conn_read(connid, ptr, offset uint32) uint32
 
 //export conn_write
-func conn_write(connid, ptr, offset uint32) uint64
+func conn_write(connid, ptr, offset uint32) uint32

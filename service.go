@@ -303,29 +303,32 @@ func (s *Service) wsHandler(w http.ResponseWriter, r *http.Request, p httprouter
 			}
 		}
 	}()
-	connID, err := i.NewConn(context.TODO(), websocketConnWriter{conn: conn})
+	wsConn := websocketConnWriter{conn: conn}
+	connID, err := i.NewConn(context.TODO(), WebsocketConnectionType, wsConn)
 	if err != nil {
 		s.errorResp(w, http.StatusInternalServerError, err)
 		return
 	}
 	for {
-		_, msg, err := conn.ReadMessage()
+		_, reader, err := conn.NextReader()
 		if err != nil {
 			break
 		}
-		i.OnConnRead(connID, msg)
+		wsConn.nextReader = reader
+		_ = i.OnConnRead(r.Context(), connID)
 	}
-	i.OnConnClose(context.TODO(), connID)
+	_ = i.OnConnClose(context.TODO(), connID)
 }
 
 type websocketConnWriter struct {
-	conn *websocket.Conn
+	conn       *websocket.Conn
+	nextReader io.Reader
 }
 
 var _ io.ReadWriteCloser = websocketConnWriter{}
 
 func (w websocketConnWriter) Read(b []byte) (n int, err error) {
-	return 0, fmt.Errorf("unimplemented")
+	return w.nextReader.Read(b)
 }
 func (w websocketConnWriter) Write(b []byte) (n int, err error) {
 	return len(b), w.conn.WriteMessage(websocket.BinaryMessage, b)
