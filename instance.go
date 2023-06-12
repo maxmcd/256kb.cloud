@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -46,8 +47,27 @@ const (
 
 type Event struct {
 	IOEvent IOEvent
-	Data    ConnectionType
 	Conn    uint32
+	Data    ConnectionType
+}
+
+// serializeEvents serializes events into a buffer, any events that don't fit
+// are returned.
+func serializeEvents(b []byte, events []Event) (int, []Event) {
+	if len(b) < 6 {
+		panic("buffer must be at least 6 bytes long")
+	}
+	for i, event := range events {
+		fmt.Println(i, (i+1)*6, len(b))
+		if (i+1)*6 > len(b) {
+			fmt.Println(events[:i])
+			return len(events[:i]) * 6, events[i:]
+		}
+		b[i*6] = byte(event.IOEvent)
+		b[(i*6)+1] = byte(event.Data)
+		binary.LittleEndian.PutUint32(b[(i*6)+2:(i*6)+6], event.Conn)
+	}
+	return len(events) * 6, nil
 }
 
 type Instance struct {
@@ -107,10 +127,10 @@ func NewInstance(ctx context.Context, cacheDir, dataDir string) (*Instance, erro
 
 	builder.WithGoModuleFunction(api.GoModuleFunc(i.connWrite),
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
-		[]api.ValueType{api.ValueTypeI32}).Export("conn_write")
+		[]api.ValueType{api.ValueTypeI64}).Export("conn_write")
 	builder.WithGoModuleFunction(api.GoModuleFunc(i.connRead),
 		[]api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32},
-		[]api.ValueType{api.ValueTypeI32}).Export("conn_read")
+		[]api.ValueType{api.ValueTypeI64}).Export("conn_read")
 	builder.WithFunc(i.connClose).Export("conn_close")
 	if _, err := hostModuleBuilder.Instantiate(ctx); err != nil {
 		return nil, err
@@ -177,6 +197,10 @@ func (i *Instance) Start(ctx context.Context) error {
 		}
 		i.bufferPtr = uint32(bufferPtrSize[0] >> 32)
 		i.bufferSize = uint32(bufferPtrSize[0])
+		fmt.Println(i.bufferPtr, i.bufferSize)
+		if i.bufferSize < 6 {
+			return fmt.Errorf("event_buffer must be 6 bytes or larger")
+		}
 	}
 	i.eventBuffer, _ = i.mod.Memory().Read(i.bufferPtr, i.bufferSize)
 	return nil
@@ -199,52 +223,43 @@ func (i *Instance) Stop(ctx context.Context) error {
 
 func (i *Instance) connRead(_ context.Context, m api.Module, stack []uint64) {
 	id := api.DecodeU32(stack[0])
-	offset := api.DecodeU32(stack[1])
+	ptr := api.DecodeU32(stack[1])
+	offset := api.DecodeU32(stack[2])
 	conn := i.getConnection(id)
 	if conn == nil {
-		// TODO
-		// logger.Error("conn doesn't exist")
+		stack[0] = uint64(syscall.ENOENT)
 		return
 	}
-	if offset > uint32(len(i.eventBuffer))-1 {
-		// TODO
-		// logger.Error("offset is larger than network buffer", "len_event_buffer", len(i.networkBuffer))
-		return
-	}
-	// TODO: writes block all execution, make a write pool
-	_, err := conn.Write(i.eventBuffer[:offset])
+
+	b, _ := i.mod.Memory().Read(ptr, offset)
+	ln, err := conn.Read(b)
 	if err != nil {
-		// TODO
-		// logger.Error("error writing to conn", "err", err)
-		return
+		if err == io.EOF {
+			stack[0] = (uint64(syscall.EAGAIN) << uint64(32)) | uint64(ln)
+			return
+		}
+		slog.Error("conn.Read", "err", err)
 	}
 	// return value
-	stack[0] = 0
+	stack[0] = uint64(ln)
 }
 
 func (i *Instance) connWrite(_ context.Context, m api.Module, stack []uint64) {
 	id := api.DecodeU32(stack[0])
-	offset := api.DecodeU32(stack[1])
+	ptr := api.DecodeU32(stack[1])
+	size := api.DecodeU32(stack[2])
 	conn := i.getConnection(id)
 	if conn == nil {
-		// TODO
-		// logger.Error("conn doesn't exist")
+		stack[0] = uint64(syscall.ENOENT)
 		return
 	}
-	if offset > uint32(len(i.eventBuffer))-1 {
-		// TODO
-		// logger.Error("offset is larger than network buffer", "len_event_buffer", len(i.networkBuffer))
-		return
-	}
-	// TODO: writes block all execution, make a write pool
-	_, err := conn.Write(i.eventBuffer[:offset])
+	b, _ := i.mod.Memory().Read(ptr, size)
+	ln, err := conn.Write(b)
 	if err != nil {
-		// TODO
-		// logger.Error("error writing to conn", "err", err)
-		return
+		panic(err)
 	}
 	// return value
-	stack[0] = 0
+	stack[0] = uint64(ln)
 }
 
 func (i *Instance) connClose(_ context.Context, m api.Module, connid uint32) (errno uint32) {
@@ -282,10 +297,17 @@ func (i *Instance) sendEvents(ctx context.Context) {
 	// TODO: do we need this lock or does wazero have a lock?
 	// TODO: is the lock for the shared buffer?
 	i.instanceLock.Lock()
-	defer i.instanceLock.Unlock()
-	if _, err := i.onEvent.Call(ctx, 0, 0); err != nil {
+	ln, events := serializeEvents(i.eventBuffer, events)
+	if _, err := i.onEvent.Call(ctx, uint64(ln)); err != nil {
 		slog.Error("on_event", "err", err)
 	}
+	i.instanceLock.Unlock()
+
+	i.eventLock.Lock()
+	if len(events) > 0 {
+		i.events = append(events, i.events...)
+	}
+	i.eventLock.Unlock()
 }
 
 func (i *Instance) NewConn(ctx context.Context, typ ConnectionType, conn io.ReadWriteCloser) (uint32, error) {
@@ -317,6 +339,9 @@ func (i *Instance) OnConnClose(ctx context.Context, id uint32) error {
 		Conn:    id,
 	})
 	i.sendEvents(ctx)
+	if err := i.removeConnection(ctx, id); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -363,6 +388,10 @@ func (i *Instance) Listen(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
 	slog.Info("Instance listening", "addr", addr)
 	for {
 		conn, err := listener.Accept()

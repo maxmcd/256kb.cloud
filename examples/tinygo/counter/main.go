@@ -38,9 +38,11 @@ func (a *App) OnClose(c Conn) {
 	delete(a.members, c)
 }
 
+var writeBuff [256]byte
+
 func sendCounter(c Conn, counter int) {
-	ln := copy(eventBuffer[0:], []byte(fmt.Sprint(counter)))
-	c.Write(eventBuffer[:ln])
+	ln := copy(writeBuff[0:], []byte(fmt.Sprint(counter)))
+	c.Write(writeBuff[:ln])
 }
 
 type Conn uint32
@@ -51,23 +53,25 @@ func (c Conn) Close() error {
 }
 
 func (c Conn) Write(b []byte) (n int, err error) {
-	p := unsafe.Pointer(&b)
+	p := unsafe.Pointer(unsafe.SliceData(b))
 	ptr, size := uint32(uintptr(p)), uint32(len(b))
 	resp := conn_write(uint32(c), ptr, size)
-	n = int(uint32(resp >> 32))
-	if uint32(resp) != 0 {
-		return n, syscall.Errno(uint32(resp))
+	n = int(uint32(resp))
+	er := uint32(resp >> 32)
+	if er != 0 {
+		return n, syscall.Errno(er)
 	}
 	return n, nil
 }
 
 func (c Conn) Read(b []byte) (n int, err error) {
-	p := unsafe.Pointer(&b)
+	p := unsafe.Pointer(&writeBuff)
 	ptr, size := uint32(uintptr(p)), uint32(len(b))
 	resp := conn_read(uint32(c), ptr, size)
-	n = int(uint32(resp >> 32))
-	if uint32(resp) != 0 {
-		return n, syscall.Errno(uint32(resp))
+	n = int(uint32(resp))
+	er := uint32(resp >> 32)
+	if er != 0 {
+		return n, syscall.Errno(er)
 	}
 	return n, nil
 }
@@ -95,15 +99,17 @@ var eventBuffer [256]byte
 func event_buffer() (ptrSize uint64) {
 	p := unsafe.Pointer(&eventBuffer)
 	ptr, size := uint32(uintptr(p)), uint32(len(eventBuffer))
+	fmt.Println(ptr, size)
 	return (uint64(ptr) << uint64(32)) | uint64(size)
 }
 
 //export on_event
 func on_event(offset uint32) {
 	buf := eventBuffer[:offset]
+	fmt.Println(buf)
 	for i := 0; i < len(buf)/6; i++ {
 		event := IOEvent(buf[i*6])
-		c := Conn(binary.BigEndian.Uint32(buf[(i*6)+2 : (i*6)+6]))
+		c := Conn(binary.LittleEndian.Uint32(buf[(i*6)+2 : (i*6)+6]))
 		switch event {
 		case ReadIOEvent:
 			app.OnData(c)
@@ -119,7 +125,7 @@ func on_event(offset uint32) {
 func conn_close(connid uint32) uint32
 
 //export conn_read
-func conn_read(connid, ptr, offset uint32) uint32
+func conn_read(connid, ptr, offset uint32) uint64
 
 //export conn_write
-func conn_write(connid, ptr, offset uint32) uint32
+func conn_write(connid, ptr, offset uint32) uint64
